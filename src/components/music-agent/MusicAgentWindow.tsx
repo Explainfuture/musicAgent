@@ -39,6 +39,7 @@ export function MusicAgentWindow() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const track = response?.track ?? null;
+
   const lyricLines = useMemo(
     () => (track?.lyrics ? track.lyrics.split("\n").map((line) => line.trim()).filter(Boolean) : []),
     [track?.lyrics],
@@ -48,6 +49,7 @@ export function MusicAgentWindow() {
     const ratio = playbackDuration > 0 ? Math.min(playbackTime / playbackDuration, 0.999) : 0;
     return Math.floor(ratio * lyricLines.length);
   }, [lyricLines.length, playbackDuration, playbackTime]);
+
 
   // QQ Music auth check
   useEffect(() => {
@@ -313,6 +315,7 @@ export function MusicAgentWindow() {
                   </motion.p>
                 ))}
               </div>
+
             ) : (
               <p className="text-muted/60">这首歌暂时没有可用歌词，先让旋律陪你一会儿。</p>
             )}
