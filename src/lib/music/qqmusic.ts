@@ -36,6 +36,7 @@ type MusicuSearchResponse = {
 const SEARCH_API = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp";
 const SEARCH_API_FALLBACK = "https://u.y.qq.com/cgi-bin/musicu.fcg";
 const COVER_TEMPLATE = "https://y.qq.com/music/photo_new/T002R300x300M000{albummid}.jpg";
+
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -130,6 +131,7 @@ export async function searchQQMusicTracks(moodProfile: MoodProfile, limit = 15):
   }
 
   if (songs.length === 0) {
+
     songs = await searchMusicu(query, limit, cookie);
   }
 

@@ -275,12 +275,14 @@ export async function POST(request: Request) {
     // which bypasses QQ Music's API signing requirement.
 
     if (candidates.length === 0) {
+
       toolTrace.push({ step: "兜底", status: "running", detail: "QQ 音乐暂无可用结果，切换到内置可播曲库。" });
       candidates = rankTracks(fallbackTracks, moodProfile, body.previousTrackIds).slice(0, 10);
       if (candidates.length === 0) {
         candidates = fallbackTracks.slice(0, 3);
       }
       toolTrace.push({ step: "兜底结果", status: "success", detail: `fallback 候选数量：${candidates.length}` });
+
     }
 
     // Step 6: AI selects
