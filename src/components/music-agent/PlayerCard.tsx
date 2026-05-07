@@ -28,6 +28,23 @@ export function PlayerCard({
   onError: () => void;
   onNext: () => void;
 }) {
+  const getQQMusicFriendlyNotice = useCallback((rawError: string | null | undefined) => {
+    if (!rawError) return "获取播放链接失败，请稍后再试。";
+    if (rawError.includes("No QQ Music cookie")) {
+      return "QQ 音乐登录已失效，请重新点击“登录 QQ 音乐”后再试。";
+    }
+    if (rawError.includes("vkey code 104009") || rawError.includes("invalidq")) {
+      return "QQ 音乐返回签名校验失败，请重新登录 QQ 音乐后重试。";
+    }
+    if (rawError.includes("vkey code 200001")) {
+      return "该歌曲可能需要会员权限，正在尝试换一首。";
+    }
+    if (rawError.includes("HTTP 403")) {
+      return "QQ 音乐请求被拒绝，请稍后重试或重新登录。";
+    }
+    return `获取播放链接失败: ${rawError}`;
+  }, []);
+
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [notice, setNotice] = useState("");
   const [needsManual, setNeedsManual] = useState(false);
@@ -58,7 +75,7 @@ export function PlayerCard({
         if (url) {
           setResolvedUrl(url);
         } else {
-          setNotice(`获取播放链接失败: ${error || "未知错误"}`);
+          setNotice(getQQMusicFriendlyNotice(error));
           onError();
         }
       });
@@ -66,7 +83,7 @@ export function PlayerCard({
       // In browser dev mode, just use the track's audioUrl if available
       setNotice("QQ 音乐播放需要 Electron 客户端。");
     }
-  }, [track, onError]);
+  }, [track, onError, getQQMusicFriendlyNotice]);
 
   const effectiveUrl = resolvedUrl || track?.audioUrl;
 
