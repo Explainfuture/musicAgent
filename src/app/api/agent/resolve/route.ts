@@ -11,9 +11,6 @@ import {
   musicAgentTools,
 } from "@/lib/ai/prompts";
 import { moodProfileSchema, selectedTrackSchema } from "@/lib/ai/schemas";
-import { searchAudiusTracks } from "@/lib/music/audius";
-import { fallbackTracks } from "@/lib/music/fallbackTracks";
-import { searchJamendoTracks } from "@/lib/music/jamendo";
 import { rankTracks } from "@/lib/music/normalize";
 import { searchQQMusicTracks, hydrateQQMusicTracks } from "@/lib/music/qqmusic";
 import type {
@@ -65,8 +62,6 @@ async function chatReply(
 // ── Search candidates ─────────────────────────────────
 
 async function searchCandidates(moodProfile: MoodProfile, diagnostics: string[]) {
-  // Build a clean, short search query for QQ Music
-  // Use searchGenre + a subset of keywords for optimal matching
   const genre = moodProfile.searchGenre || "";
   const cleanKeywords = moodProfile.keywords.slice(0, 3);
   const searchProfile = {
@@ -74,25 +69,14 @@ async function searchCandidates(moodProfile: MoodProfile, diagnostics: string[])
     keywords: [...cleanKeywords, genre].filter(Boolean).slice(0, 4),
   };
 
-  const groups = await Promise.allSettled([
-    searchJamendoTracks(moodProfile),
-    searchAudiusTracks(moodProfile),
-    searchQQMusicTracks(searchProfile),
-  ]);
-
-  const candidates: PlayableTrack[] = [];
-
-  for (const group of groups) {
-    if (group.status === "fulfilled") {
-      candidates.push(...group.value);
-    } else {
-      diagnostics.push(
-        group.reason instanceof Error ? group.reason.message : String(group.reason),
-      );
-    }
+  try {
+    return await searchQQMusicTracks(searchProfile);
+  } catch (err) {
+    diagnostics.push(
+      err instanceof Error ? err.message : String(err),
+    );
+    return [];
   }
-
-  return candidates;
 }
 
 // ── Select final track ────────────────────────────────
@@ -257,10 +241,10 @@ export async function POST(request: Request) {
       }
     }
 
-    // Step 3: Search
+    // Step 3: Search QQ Music
     const rawCandidates = await searchCandidates(moodProfile, diagnostics);
 
-    // Step 4: Rank and filter
+    // Step 4: Rank
     let candidates = rankTracks(
       rawCandidates,
       moodProfile,
@@ -271,34 +255,25 @@ export async function POST(request: Request) {
       candidates = rankTracks(rawCandidates, moodProfile, []).slice(0, 10);
     }
 
-    // Step 5: Hydrate QQ Music
-    const qqTracks = candidates.filter((t) => t.source === "qqmusic");
-    if (qqTracks.length > 0) {
-      const hydrated = await hydrateQQMusicTracks(qqTracks);
+    // Step 5: Hydrate play URLs
+    if (candidates.length > 0) {
+      const hydrated = await hydrateQQMusicTracks(candidates);
       if (hydrated.length > 0) {
-        candidates = [...hydrated, ...candidates.filter((t) => t.source !== "qqmusic")];
+        candidates = hydrated;
       } else {
         diagnostics.push("QQ Music tracks had no playable URLs.");
-        candidates = candidates.filter((t) => t.source !== "qqmusic");
+        candidates = [];
       }
     }
 
-    // Step 6: Fallback
-    if (candidates.length === 0) {
-      diagnostics.push("Falling back to direct tracks.");
-      candidates = rankTracks(fallbackTracks, moodProfile, body.previousTrackIds).slice(0, 10);
-    }
-    if (candidates.length === 0) {
-      candidates = rankTracks(fallbackTracks, moodProfile, []).slice(0, 10);
-    }
     if (candidates.length === 0) {
       return NextResponse.json(
-        { error: "暂时没有找到可播放的音乐。" },
+        { error: "QQ 音乐暂时没有找到可播放的歌曲，试试换个关键词。" },
         { status: 503 },
       );
     }
 
-    // Step 7: AI selects
+    // Step 6: AI selects
     const selection = await selectTrack({
       userText: text,
       moodProfile,
