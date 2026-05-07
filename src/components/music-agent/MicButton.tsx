@@ -1,5 +1,8 @@
 "use client";
 
+import { motion } from "framer-motion";
+import { Mic } from "lucide-react";
+
 export function MicButton({
   isListening,
   isSupported,
@@ -14,26 +17,32 @@ export function MicButton({
   if (!isSupported) return null;
 
   return (
-    <button
+    <motion.button
       type="button"
       onClick={isListening ? onStop : onStart}
-      className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-all active:scale-95 ${
+      whileTap={{ scale: 0.95 }}
+      className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
         isListening
-          ? "bg-coral/15 text-coral shadow-[0_0_0_3px_rgba(232,121,139,0.12)]"
-          : "bg-white/60 text-muted-plum/70 hover:text-muted-plum hover:bg-rose-pink/8"
+          ? "bg-rose/10 text-rose"
+          : "text-muted/60 hover:text-muted hover:bg-black/[0.03]"
       }`}
-      title={isListening ? "停止聆听" : "点击说话"}
     >
-      {/* Mic icon */}
-      <svg
-        className={`h-3.5 w-3.5 ${isListening ? "animate-status-pulse" : ""}`}
-        viewBox="0 0 24 24"
-        fill="currentColor"
-      >
-        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z" />
-        <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
-      </svg>
-      {isListening ? "聆听中" : "语音"}
-    </button>
+      {isListening ? (
+        <>
+          <motion.span
+            animate={{ opacity: [0.5, 1, 0.5] }}
+            transition={{ duration: 1, repeat: Infinity }}
+          >
+            <Mic size={14} strokeWidth={1.5} />
+          </motion.span>
+          聆听中
+        </>
+      ) : (
+        <>
+          <Mic size={14} strokeWidth={1.5} />
+          语音
+        </>
+      )}
+    </motion.button>
   );
 }
