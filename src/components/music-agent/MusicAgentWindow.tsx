@@ -334,15 +334,14 @@ export function MusicAgentWindow() {
             />
 
             {toolTrace.length > 0 && (
-              <ul className="space-y-1.5 rounded-2xl border border-border/40 bg-surface/55 p-2.5">
+              <div className="space-y-1">
                 {toolTrace.map((t, idx) => (
-                  <li key={`${t.step}-${idx}`} className="grid grid-cols-[14px_44px_1fr] items-start gap-2 text-xs text-foreground/70">
-                    <span className="leading-5">{t.status === "running" ? "⏳" : t.status === "success" ? "✅" : "⚠️"}</span>
-                    <span className="leading-5 font-medium text-foreground/65">{t.step}</span>
-                    <span className="leading-5">{t.detail}</span>
-                  </li>
+                  <div key={`${t.step}-${idx}`} className="rounded-xl bg-surface/60 px-3 py-2 text-xs text-foreground/70">
+                    <span className="mr-1">{t.status === "running" ? "⏳" : t.status === "success" ? "✅" : "⚠️"}</span>
+                    <span className="font-medium">{t.step}:</span> {t.detail}
+                  </div>
                 ))}
-              </ul>
+              </div>
             )}
 
             {notice && (

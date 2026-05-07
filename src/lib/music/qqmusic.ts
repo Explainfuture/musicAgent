@@ -37,36 +37,6 @@ const SEARCH_API = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp";
 const SEARCH_API_FALLBACK = "https://u.y.qq.com/cgi-bin/musicu.fcg";
 const COVER_TEMPLATE = "https://y.qq.com/music/photo_new/T002R300x300M000{albummid}.jpg";
 
-const QQ_SEED_TRACKS: ClientSearchSong[] = [
-  {
-    mid: "001J5QJL1pRQYB",
-    id: 1,
-    name: "晴天",
-    title: "晴天",
-    singer: [{ mid: "0025NhlN2yWrP4", name: "周杰伦", title: "周杰伦" }],
-    album: { mid: "001zu7M72rM2cy", name: "叶惠美", title: "叶惠美" },
-    interval: 269,
-  },
-  {
-    mid: "000B8Y9U3KkA5A",
-    id: 2,
-    name: "平凡之路",
-    title: "平凡之路",
-    singer: [{ mid: "003N8IdN1ByXh6", name: "朴树", title: "朴树" }],
-    album: { mid: "001Qv2Qw0z7P0A", name: "猎户星座", title: "猎户星座" },
-    interval: 302,
-  },
-  {
-    mid: "003rJ7Lx1b3f0P",
-    id: 3,
-    name: "稻香",
-    title: "稻香",
-    singer: [{ mid: "0025NhlN2yWrP4", name: "周杰伦", title: "周杰伦" }],
-    album: { mid: "001fqWyA1Jt2g2", name: "魔杰座", title: "魔杰座" },
-    interval: 223,
-  },
-];
-
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -161,15 +131,12 @@ export async function searchQQMusicTracks(moodProfile: MoodProfile, limit = 15):
   }
 
   if (songs.length === 0) {
-    try {
-      songs = await searchMusicu(query, limit, cookie);
-    } catch {
-      songs = [];
-    }
+
+    songs = await searchMusicu(query, limit, cookie);
   }
 
   if (!songs.length) {
-    songs = QQ_SEED_TRACKS;
+    throw new Error(`QQ Music: no results for "${query}"`);
   }
 
   return toPlayableTracks(songs, moodProfile);
