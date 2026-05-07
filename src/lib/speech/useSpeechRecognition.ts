@@ -38,6 +38,8 @@ export function useSpeechRecognition(options?: {
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const optionsRef = useRef(options);
   const manualStopRef = useRef(false);
+  const heardSpeechRef = useRef(false);
+  const noSpeechTimerRef = useRef<number | null>(null);
   const transcriptRef = useRef("");
   const emittedTextRef = useRef("");
   const [isListening, setIsListening] = useState(false);
@@ -77,9 +79,18 @@ export function useSpeechRecognition(options?: {
     const recognition = new Recognition();
     recognition.lang = "zh-CN";
     recognition.interimResults = true;
-    recognition.continuous = false;
+    recognition.continuous = true;
 
-    recognition.onstart = () => setIsListening(true);
+    recognition.onstart = () => {
+      setIsListening(true);
+      heardSpeechRef.current = false;
+      if (noSpeechTimerRef.current) window.clearTimeout(noSpeechTimerRef.current);
+      noSpeechTimerRef.current = window.setTimeout(() => {
+        if (!heardSpeechRef.current && !manualStopRef.current) {
+          optionsRef.current?.onError?.("没有检测到语音输入，请检查麦克风后再试一次。");
+        }
+      }, 3500);
+    };
     recognition.onresult = (event) => {
       let interim = "";
 
@@ -87,6 +98,7 @@ export function useSpeechRecognition(options?: {
         const result = event.results[index];
         const part = result[0].transcript.trim();
         if (!part) continue;
+        heardSpeechRef.current = true;
 
         if (result.isFinal) {
           transcriptRef.current = `${transcriptRef.current} ${part}`.trim();
@@ -100,6 +112,7 @@ export function useSpeechRecognition(options?: {
     };
     recognition.onerror = (event) => {
       setIsListening(false);
+      if (noSpeechTimerRef.current) window.clearTimeout(noSpeechTimerRef.current);
       const messages: Record<string, string> = {
         "not-allowed": "麦克风没拿到权限，可以直接打字。",
         "audio-capture": "没有检测到可用麦克风，可以直接打字。",
@@ -109,6 +122,7 @@ export function useSpeechRecognition(options?: {
       optionsRef.current?.onError?.(messages[event.error] || "识别失败，可以直接打字。");
     };
     recognition.onend = () => {
+      if (noSpeechTimerRef.current) window.clearTimeout(noSpeechTimerRef.current);
       emitTranscript();
       setIsListening(false);
 
@@ -124,6 +138,7 @@ export function useSpeechRecognition(options?: {
 
   const stop = useCallback(() => {
     manualStopRef.current = true;
+    if (noSpeechTimerRef.current) window.clearTimeout(noSpeechTimerRef.current);
     recognitionRef.current?.stop();
     emitTranscript();
     setIsListening(false);
@@ -138,8 +153,19 @@ export function useSpeechRecognition(options?: {
       return;
     }
 
+    if (!navigator.mediaDevices?.getUserMedia) {
+      optionsRef.current?.onError?.("当前环境无法访问麦克风设备。");
+      return;
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
       stream.getTracks().forEach((track) => track.stop());
     } catch {
       optionsRef.current?.onError?.("麦克风没拿到权限，可以直接打字。");
