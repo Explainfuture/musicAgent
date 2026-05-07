@@ -39,6 +39,12 @@ export type FeedbackRecord = {
   createdAt: string;
 };
 
+export type AgentToolTrace = {
+  step: string;
+  status: "running" | "success" | "failed";
+  detail: string;
+};
+
 export type AgentResolveRequest = {
   text: string;
   previousTrackIds?: string[];
@@ -55,4 +61,5 @@ export type AgentResolveResponse = {
   // Chat mode
   chatReply?: string;
   sourceDiagnostics?: string[];
+  toolTrace?: AgentToolTrace[];
 };

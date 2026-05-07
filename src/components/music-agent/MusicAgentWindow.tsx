@@ -12,8 +12,8 @@ import { Button } from "@/components/ui/button";
 import { readFeedbackMemory, saveFeedbackRecord } from "@/lib/storage/feedbackMemory";
 import { useSpeechRecognition } from "@/lib/speech/useSpeechRecognition";
 import { cn } from "@/lib/utils";
-import type { AgentResolveResponse, AgentStatus } from "@/types/agent";
-import { Music, LogIn, CheckCircle2 } from "lucide-react";
+import type { AgentResolveResponse, AgentStatus, AgentToolTrace } from "@/types/agent";
+import { Music, LogIn, CheckCircle2, LogOut } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -28,6 +28,7 @@ export function MusicAgentWindow() {
   const [response, setResponse] = useState<AgentResolveResponse | null>(null);
   const [prevIds, setPrevIds] = useState<string[]>([]);
   const [notice, setNotice] = useState("");
+  const [toolTrace, setToolTrace] = useState<AgentToolTrace[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([
     { role: "agent", content: "嗨，我是你的音乐伙伴。告诉我你现在的感受，我会为你挑一首最适合此刻的歌。" },
   ]);
@@ -54,6 +55,15 @@ export function MusicAgentWindow() {
     setQqLoggingIn(false);
   };
 
+  const handleQQLogout = async () => {
+    if (!window.musicAgentShell?.isElectron) return;
+    const r = await window.musicAgentShell.logoutQQMusic();
+    if (r.success) {
+      setQqLoggedIn(false);
+      setNotice("QQ 音乐已退出登录。");
+    }
+  };
+
   // Scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -73,6 +83,7 @@ export function MusicAgentWindow() {
       if (!trimmed) return;
       setNotice("");
       setStatus("thinking");
+      setToolTrace([{ step: "思考", status: "running", detail: "正在理解你的输入并规划处理步骤..." }]);
       setLastSubmitted(trimmed);
 
       const allPrevIds = Array.from(new Set([...prevIds, ...extraPrevIds]));
@@ -96,11 +107,13 @@ export function MusicAgentWindow() {
         }
 
         const data = (await res.json()) as AgentResolveResponse;
+        if (data.toolTrace?.length) setToolTrace(data.toolTrace);
 
         // Chat mode
         if (data.intent === "chat" && data.chatReply) {
           setMessages((p) => [...p, { role: "agent", content: data.chatReply! }]);
           setStatus("idle");
+          setToolTrace([]);
           return;
         }
 
@@ -116,6 +129,7 @@ export function MusicAgentWindow() {
         }
       } catch (err) {
         setStatus("error");
+        setToolTrace((p) => [...p, { step: "错误", status: "failed", detail: (err as Error).message }]);
         const msg = (err as Error).message;
         setNotice(msg);
         setMessages((p) => [...p, { role: "system", content: msg }]);
@@ -168,9 +182,9 @@ export function MusicAgentWindow() {
   // ── Render ────────────────────────────────────────────
 
   return (
-    <div className="flex h-screen w-full max-w-[1024px] overflow-hidden border border-border/50 bg-surface/60 shadow-lg backdrop-blur-xl rounded-none">
+    <div className="flex h-screen w-screen overflow-hidden border border-border/50 bg-surface/60 shadow-lg backdrop-blur-xl rounded-none">
       {/* ===== LEFT: Agent Identity + Input ===== */}
-      <div className="flex w-[22%] shrink-0 flex-col border-r border-border/40 bg-surface-muted/40">
+      <div className="flex w-[24%] min-w-[260px] shrink-0 flex-col border-r border-border/40 bg-surface-muted/40">
         {/* Top: Orb + Branding + QQ Login */}
         <div className="shrink-0 space-y-3 px-4 pt-5 pb-3">
           <div className="flex flex-col items-center gap-3">
@@ -207,6 +221,17 @@ export function MusicAgentWindow() {
             {qqLoggingIn ? "登录中" : qqLoggedIn ? "QQ 已登录" : "登录 QQ 音乐"}
           </button>
 
+          {qqLoggedIn && (
+            <button
+              type="button"
+              onClick={handleQQLogout}
+              className="flex w-full items-center justify-center gap-1.5 rounded-full py-1.5 text-[10px] font-medium bg-surface/60 text-muted/55 transition-colors hover:bg-rose-surface/35 hover:text-rose/70"
+            >
+              <LogOut size={12} />
+              退出 QQ 登录
+            </button>
+          )}
+
           <StatusIndicator status={status} />
         </div>
 
@@ -228,7 +253,7 @@ export function MusicAgentWindow() {
       </div>
 
       {/* ===== CENTER: Player (hero) ===== */}
-      <div className="flex w-[36%] shrink-0 flex-col items-center justify-center border-r border-border/40 px-6">
+      <div className="flex w-[38%] min-w-[340px] shrink-0 flex-col items-center justify-center border-r border-border/40 px-6">
         <AnimatePresence mode="wait">
           {track ? (
             <motion.div
@@ -307,6 +332,17 @@ export function MusicAgentWindow() {
               segments={explanationSegments}
               active={status === "playing" || status === "paused"}
             />
+
+            {toolTrace.length > 0 && (
+              <div className="space-y-1">
+                {toolTrace.map((t, idx) => (
+                  <div key={`${t.step}-${idx}`} className="rounded-xl bg-surface/60 px-3 py-2 text-xs text-foreground/70">
+                    <span className="mr-1">{t.status === "running" ? "⏳" : t.status === "success" ? "✅" : "⚠️"}</span>
+                    <span className="font-medium">{t.step}:</span> {t.detail}
+                  </div>
+                ))}
+              </div>
+            )}
 
             {notice && (
               <motion.div
