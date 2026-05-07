@@ -39,6 +39,7 @@ export function MusicAgentWindow() {
   const [playbackDuration, setPlaybackDuration] = useState(0);
   const [playHistory, setPlayHistory] = useState<PlayableTrack[]>([]);
   const [toolTraceExpanded, setToolTraceExpanded] = useState(false);
+  const traceTimerRef = useRef<number | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const track = response?.track ?? null;
@@ -60,6 +61,44 @@ export function MusicAgentWindow() {
       window.musicAgentShell.getQQMusicCookieStatus().then((s) => setQqLoggedIn(s.loggedIn));
     }
   }, []);
+
+  useEffect(() => {
+    if (status !== "thinking" && status !== "searching") {
+      if (traceTimerRef.current) {
+        window.clearInterval(traceTimerRef.current);
+        traceTimerRef.current = null;
+      }
+      return;
+    }
+
+    const staged = [
+      "正在分析情绪并决定要调用的工具...",
+      "正在校验上下文与偏好记忆...",
+      "正在请求曲库并排序候选歌曲...",
+      "正在比对候选歌曲的情绪匹配度...",
+    ];
+    let i = 0;
+    traceTimerRef.current = window.setInterval(() => {
+      i = (i + 1) % staged.length;
+      setToolTrace((prev) => {
+        if (prev.length === 0) {
+          return [{ step: "思考", status: "running", detail: staged[i] }];
+        }
+        const copy = [...prev];
+        const runningIdx = copy.findIndex((item) => item.status === "running");
+        if (runningIdx >= 0) copy[runningIdx] = { ...copy[runningIdx], detail: staged[i] };
+        else copy.push({ step: "思考", status: "running", detail: staged[i] });
+        return copy;
+      });
+    }, 1100);
+
+    return () => {
+      if (traceTimerRef.current) {
+        window.clearInterval(traceTimerRef.current);
+        traceTimerRef.current = null;
+      }
+    };
+  }, [status]);
 
   const handleQQLogin = async () => {
     if (!window.musicAgentShell?.isElectron) return;
@@ -207,7 +246,7 @@ export function MusicAgentWindow() {
   return (
     <div className="flex h-screen w-screen overflow-hidden rounded-none border border-border/40 bg-surface/45 shadow-lg backdrop-blur-xl">
       {/* ===== LEFT: Agent Identity + Input ===== */}
-      <div className="flex w-[24%] min-w-[260px] shrink-0 flex-col border-r border-border/40 bg-surface-muted/40">
+      <div className="flex w-[22%] min-w-[250px] max-w-[340px] shrink-0 flex-col border-r border-border/40 bg-surface-muted/40">
         {/* Top: Orb + Branding + QQ Login */}
         <div className="shrink-0 space-y-3 px-4 pt-5 pb-3">
           <div className="flex flex-col items-center gap-3">
@@ -292,7 +331,8 @@ export function MusicAgentWindow() {
       </div>
 
       {/* ===== CENTER: Player (hero) ===== */}
-      <div className="flex w-[38%] min-w-[340px] shrink-0 flex-col items-center justify-start border-r border-border/40 px-6 pt-10">
+      <div className="flex min-w-[360px] flex-1 flex-col items-center border-r border-border/40 px-5 pt-6 pb-4">
+        <div className="flex h-full w-full max-w-[560px] flex-col items-center gap-4 overflow-y-auto">
         <AnimatePresence mode="wait">
           {track ? (
             <motion.div
@@ -300,7 +340,7 @@ export function MusicAgentWindow() {
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96 }}
-              className="w-full"
+              className="w-full max-w-[430px]"
             >
               <PlayerCard
                 track={track}
@@ -335,7 +375,7 @@ export function MusicAgentWindow() {
           )}
         </AnimatePresence>
 
-        <div className="mt-6 w-full max-w-[360px] rounded-3xl border border-white/60 bg-white/55 p-4 shadow-md backdrop-blur-xl">
+        <div className="w-full max-w-[430px] rounded-3xl border border-white/60 bg-white/55 p-4 shadow-md backdrop-blur-xl">
           <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground/70">
             <AudioLines size={14} className="text-rose/70" /> 当前歌词
           </div>
@@ -360,10 +400,11 @@ export function MusicAgentWindow() {
             )}
           </div>
         </div>
+        </div>
       </div>
 
       {/* ===== RIGHT: Chat Flow ===== */}
-      <div className="flex w-[42%] shrink-0 flex-col bg-surface/30">
+      <div className="flex w-[40%] min-w-[420px] max-w-[760px] shrink-0 flex-col bg-surface/30">
         {/* Chat header */}
         <div className="shrink-0 flex items-center gap-2 border-b border-border/30 px-5 py-2.5">
           <span className="text-xs font-medium text-foreground/60">对话</span>
@@ -419,7 +460,7 @@ export function MusicAgentWindow() {
                 </div>
 
                 {toolTraceExpanded && (
-                  <div className="mt-2 space-y-1">
+                  <div className="mt-2 max-h-[280px] space-y-1 overflow-y-auto pr-1">
                     {toolTrace.map((t, idx) => (
                       <div key={`${t.step}-${idx}`} className="rounded-lg bg-surface/70 px-2.5 py-1.5 text-xs text-foreground/70">
                         <span className="mr-1">{t.status === "running" ? "⏳" : t.status === "success" ? "✅" : "⚠️"}</span>
