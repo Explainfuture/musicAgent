@@ -6,5 +6,6 @@ contextBridge.exposeInMainWorld("musicAgentShell", {
 
   loginQQMusic: () => ipcRenderer.invoke("qqmusic:login"),
   getQQMusicCookieStatus: () => ipcRenderer.invoke("qqmusic:cookie-status"),
+  logoutQQMusic: () => ipcRenderer.invoke("qqmusic:logout"),
   getQQMusicPlayUrl: (songmid) => ipcRenderer.invoke("qqmusic:vkey", songmid),
 });

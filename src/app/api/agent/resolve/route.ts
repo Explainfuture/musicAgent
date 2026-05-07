@@ -16,6 +16,7 @@ import { searchQQMusicTracks } from "@/lib/music/qqmusic";
 import type {
   AgentResolveRequest,
   AgentResolveResponse,
+  AgentToolTrace,
   MoodProfile,
 } from "@/types/agent";
 import type { PlayableTrack } from "@/types/music";
@@ -127,7 +128,8 @@ async function selectTrack(input: {
 
 // ── Tool calling flow ─────────────────────────────────
 
-async function analyzeWithTools(text: string, diagnostics: string[]) {
+async function analyzeWithTools(text: string, diagnostics: string[], toolTrace: AgentToolTrace[]) {
+  toolTrace.push({ step: "思考", status: "running", detail: "正在分析情绪并决定要调用的工具..." });
   const result = await callDeepSeekWithTools({
     messages: [
       { role: "system", content: agentSystemPrompt },
@@ -141,9 +143,13 @@ async function analyzeWithTools(text: string, diagnostics: string[]) {
   });
 
   const toolCall = result.toolCalls.find((tc) => tc.name === "analyze_and_search");
+  if (toolCall) {
+    toolTrace.push({ step: "工具调用", status: "success", detail: `已调用 ${toolCall.name}` });
+  }
 
   if (!toolCall) {
     // LLM chose not to call the tool — this might be a chat
+    toolTrace.push({ step: "工具调用", status: "failed", detail: "模型未调用 analyze_and_search，进入后备流程。" });
     return null;
   }
 
@@ -178,6 +184,7 @@ async function analyzeWithTools(text: string, diagnostics: string[]) {
   };
 
   const parsed = moodProfileSchema.safeParse(moodProfile);
+  toolTrace.push({ step: "工具结果", status: parsed.success ? "success" : "failed", detail: parsed.success ? `情绪：${moodProfile.mood.join("/")}，能量：${moodProfile.energy}` : "工具返回结构校验失败" });
   if (!parsed.success) {
     diagnostics.push(`Tool call validation: ${parsed.error.message}`);
     return null;
@@ -199,6 +206,7 @@ export async function POST(request: Request) {
 
     const hasTrack = Boolean(body.previousTrackIds?.length);
     const diagnostics: string[] = [];
+    const toolTrace: AgentToolTrace[] = [];
 
     // Step 1: Classify intent — chat or music?
     const intent = await classifyIntent(text, hasTrack);
@@ -211,6 +219,7 @@ export async function POST(request: Request) {
         intent: "chat" as const,
         chatReply: reply,
         sourceDiagnostics: diagnostics,
+      toolTrace,
       });
     }
 
@@ -219,7 +228,7 @@ export async function POST(request: Request) {
     let moodProfile: MoodProfile;
 
     try {
-      const toolResult = await analyzeWithTools(text, diagnostics);
+      const toolResult = await analyzeWithTools(text, diagnostics, toolTrace);
       if (toolResult) {
         moodProfile = toolResult;
       } else {
@@ -229,20 +238,25 @@ export async function POST(request: Request) {
       diagnostics.push(
         `Tool calling failed: ${(error as Error).message}. Falling back.`,
       );
+      toolTrace.push({ step: "回退", status: "running", detail: "工具调用失败，切换到 JSON 解析方案。" });
       try {
         const result = await callDeepSeekJson<unknown>([
           { role: "system", content: agentSystemPrompt },
           { role: "user", content: buildMoodPrompt(text) },
         ]);
         moodProfile = moodProfileSchema.parse(result);
+        toolTrace.push({ step: "回退结果", status: "success", detail: "JSON 解析成功。" });
       } catch (fallbackError) {
         diagnostics.push(`JSON fallback: ${(fallbackError as Error).message}`);
         moodProfile = fallbackParseMood(text);
+        toolTrace.push({ step: "回退结果", status: "failed", detail: "JSON 解析失败，使用规则兜底。" });
       }
     }
 
     // Step 3: Search QQ Music
+    toolTrace.push({ step: "检索", status: "running", detail: "正在请求 QQ 音乐候选歌曲..." });
     const rawCandidates = await searchCandidates(moodProfile, diagnostics);
+    toolTrace.push({ step: "检索结果", status: rawCandidates.length > 0 ? "success" : "failed", detail: `候选数量：${rawCandidates.length}` });
 
     // Step 4: Rank
     let candidates = rankTracks(
@@ -261,12 +275,13 @@ export async function POST(request: Request) {
 
     if (candidates.length === 0) {
       return NextResponse.json(
-        { error: "QQ 音乐暂时没有找到可播放的歌曲，试试换个关键词。" },
+        { error: "QQ 音乐暂时不可用，请稍后重试。" },
         { status: 503 },
       );
     }
 
     // Step 6: AI selects
+    toolTrace.push({ step: "选歌", status: "running", detail: "正在结合语义和候选集挑选最终歌曲..." });
     const selection = await selectTrack({
       userText: text,
       moodProfile,
@@ -274,12 +289,15 @@ export async function POST(request: Request) {
       diagnostics,
     });
 
+    toolTrace.push({ step: "选歌结果", status: "success", detail: `已选择：${selection.track.title}` });
+
     return NextResponse.json({
       intent: "music" as const,
       moodProfile,
       track: selection.track,
       explanationSegments: selection.explanationSegments,
       sourceDiagnostics: diagnostics,
+      toolTrace,
     });
   } catch (error) {
     return NextResponse.json(

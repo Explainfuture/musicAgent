@@ -27,6 +27,12 @@ function saveCookie(cookie) {
   );
 }
 
+function clearSavedCookie() {
+  try {
+    if (fs.existsSync(COOKIE_FILE)) fs.unlinkSync(COOKIE_FILE);
+  } catch {}
+}
+
 function createWindow() {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(["media", "microphone"].includes(permission));
@@ -82,6 +88,17 @@ function setupIPC() {
   ipcMain.handle("qqmusic:cookie-status", () => {
     const cookie = readSavedCookie();
     return { loggedIn: Boolean(cookie), cookie: cookie || "" };
+  });
+
+
+  ipcMain.handle("qqmusic:logout", async () => {
+    clearSavedCookie();
+    try {
+      await session.defaultSession.cookies.remove("https://y.qq.com", "uin");
+      await session.defaultSession.cookies.remove("https://y.qq.com", "qqmusic_key");
+      await session.defaultSession.cookies.remove("https://y.qq.com", "wxuin");
+    } catch {}
+    return { success: true };
   });
 
   // Get play URL using Electron's Chromium net.fetch (bypasses API signing)
