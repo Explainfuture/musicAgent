@@ -124,7 +124,9 @@ function setupIPC() {
       const data = await response.json();
       const vkeyData = data?.req_0;
       if (!vkeyData || vkeyData.code !== 0) {
-        return { url: null, error: `vkey code ${vkeyData?.code || "null"}` };
+        const code = vkeyData?.code ?? "null";
+        const msg = vkeyData?.msg || "";
+        return { url: null, error: `vkey code ${code}${msg ? ` (${msg})` : ""}` };
       }
 
       const info = vkeyData.data?.midurlinfo?.[0];
@@ -137,7 +139,7 @@ function setupIPC() {
 
       return { url: null, error: "purl empty" };
     } catch (err) {
-      return { url: null, error: err.message };
+      return { url: null, error: err instanceof Error ? err.message : String(err) };
     }
   });
 }
