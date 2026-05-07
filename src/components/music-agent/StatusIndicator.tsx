@@ -15,7 +15,7 @@ const config: Record<AgentStatus, { label: string; description: string; icon: ty
   error: { label: "出了点问题", description: "我会马上重试", icon: AlertTriangle },
 };
 
-export function StatusIndicator({ status }: { status: AgentStatus }) {
+export function StatusIndicator({ status, detail }: { status: AgentStatus; detail?: string }) {
   const { label, description, icon: Icon } = config[status];
   const spinning = ["thinking", "searching", "transcribing"].includes(status);
 
@@ -35,7 +35,7 @@ export function StatusIndicator({ status }: { status: AgentStatus }) {
       </motion.div>
       <div className="min-w-0">
         <p className="text-xs font-semibold text-foreground/85">{label}</p>
-        <p className="truncate text-[11px] text-muted/70">{description}</p>
+        <p className="truncate text-[11px] text-muted/70">{detail || description}</p>
       </div>
     </motion.div>
   );

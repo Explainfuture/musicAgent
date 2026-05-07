@@ -9,6 +9,7 @@ type SpeechRecognitionLike = {
   onstart: (() => void) | null;
   onresult:
     | ((event: {
+        resultIndex: number;
         results: ArrayLike<{
           isFinal: boolean;
           0: { transcript: string };
@@ -63,64 +64,39 @@ export function useSpeechRecognition(options?: {
     optionsRef.current?.onFinalText?.(text);
   }, []);
 
-  const stop = useCallback(() => {
-    manualStopRef.current = true;
-    recognitionRef.current?.stop();
-    emitTranscript();
-    setIsListening(false);
-  }, [emitTranscript]);
-
-  const start = useCallback(async () => {
-    if (typeof window === "undefined") return;
+  const ensureRecognition = useCallback(() => {
+    if (typeof window === "undefined") return null;
+    if (recognitionRef.current) return recognitionRef.current;
 
     const speechWindow = window as SpeechWindow;
     const Recognition =
       speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition;
 
-    if (!Recognition) {
-      optionsRef.current?.onUnsupported?.();
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach((track) => track.stop());
-    } catch {
-      optionsRef.current?.onError?.("麦克风没拿到权限，可以直接打字。");
-      return;
-    }
-
-    manualStopRef.current = false;
-    transcriptRef.current = "";
-    emittedTextRef.current = "";
-    setInterimText("");
+    if (!Recognition) return null;
 
     const recognition = new Recognition();
     recognition.lang = "zh-CN";
     recognition.interimResults = true;
-    recognition.continuous = true;
+    recognition.continuous = false;
+
     recognition.onstart = () => setIsListening(true);
     recognition.onresult = (event) => {
       let interim = "";
-      let finalText = "";
 
-      for (let index = 0; index < event.results.length; index += 1) {
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index];
+        const part = result[0].transcript.trim();
+        if (!part) continue;
+
         if (result.isFinal) {
-          finalText += result[0].transcript;
+          transcriptRef.current = `${transcriptRef.current} ${part}`.trim();
         } else {
-          interim += result[0].transcript;
+          interim = `${interim} ${part}`.trim();
         }
       }
 
-      const nextText = `${finalText}${interim}`.trim();
-      transcriptRef.current = nextText;
+      const nextText = `${transcriptRef.current} ${interim}`.trim();
       setInterimText(nextText);
-
-      if (finalText.trim() && finalText.trim() !== emittedTextRef.current) {
-        emittedTextRef.current = finalText.trim();
-        optionsRef.current?.onFinalText?.(finalText.trim());
-      }
     };
     recognition.onerror = (event) => {
       setIsListening(false);
@@ -140,14 +116,51 @@ export function useSpeechRecognition(options?: {
         optionsRef.current?.onError?.("我没有听到声音，可以再点一次说话。");
       }
     };
+
     recognitionRef.current = recognition;
+    return recognition;
+  }, [emitTranscript]);
+
+
+  const stop = useCallback(() => {
+    manualStopRef.current = true;
+    recognitionRef.current?.stop();
+    emitTranscript();
+    setIsListening(false);
+  }, [emitTranscript]);
+
+  const start = useCallback(async () => {
+    if (typeof window === "undefined") return;
+
+    const recognition = ensureRecognition();
+    if (!recognition) {
+      optionsRef.current?.onUnsupported?.();
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+    } catch {
+      optionsRef.current?.onError?.("麦克风没拿到权限，可以直接打字。");
+      return;
+    }
+
+    manualStopRef.current = false;
+    transcriptRef.current = "";
+    emittedTextRef.current = "";
+    setInterimText("");
+
+    if (isListening) {
+      recognition.stop();
+    }
     try {
       recognition.start();
     } catch {
       setIsListening(false);
       optionsRef.current?.onError?.("语音识别启动失败，可以再点一次或直接打字。");
     }
-  }, [emitTranscript]);
+  }, [ensureRecognition, isListening]);
 
   return {
     isSupported,
