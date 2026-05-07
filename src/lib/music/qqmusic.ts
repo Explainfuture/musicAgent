@@ -1,5 +1,6 @@
 import type { MoodProfile } from "@/types/agent";
 import type { PlayableTrack } from "@/types/music";
+import { getQQMusicCookie } from "./qqmusicAuth";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -11,25 +12,11 @@ type QQMusicSearchSong = {
   albumname: string;
   interval: number;
   strMediaMid?: string;
-  pay?: { payplay?: number; pay_month?: number };
-};
-
-type QQMusicSearchBody = {
-  code: number;
-  data: {
-    body: {
-      song: {
-        list: QQMusicSearchSong[];
-        totalnum: number;
-      };
-    };
-  };
 };
 
 type QQMusicVkeyInfo = {
   songmid: string;
   purl: string;
-  p2purl: string;
   filename: string;
 };
 
@@ -38,7 +25,6 @@ type QQMusicVkeyBody = {
   data: {
     midurlinfo: QQMusicVkeyInfo[];
     sip: string[];
-    testfile2g: string;
   };
 };
 
@@ -47,25 +33,29 @@ type QQMusicVkeyBody = {
 const QQ_MUSIC_API = "https://u.y.qq.com/cgi-bin/musicu.fcg";
 const COVER_TEMPLATE = "https://y.qq.com/music/photo_new/T002R300x300M000{albummid}.jpg";
 
-function guid() {
-  return String(Math.floor(Math.random() * 1000000000));
+const USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+
+// Persistent guid (changes per process, not per call)
+const GLOBAL_GUID = String(Math.floor(Math.random() * 10000000000));
+
+// ── Cookie helpers ─────────────────────────────────────
+
+function parseUin(cookie: string): string {
+  const uinMatch = cookie.match(/(?:^|;\s*)uin=([^;]+)/);
+  return uinMatch ? uinMatch[1].replace(/\D/g, "") : "0";
 }
 
-function makeCookieHeader(): string {
-  const cookie = process.env.QQMUSIC_COOKIE;
-  if (!cookie) return "";
-  return cookie;
+function getCookie(): string {
+  return getQQMusicCookie();
 }
 
 // ── Search ──────────────────────────────────────────────
 
 function buildSearchQuery(moodProfile: MoodProfile): string {
-  // Use only the keywords (which are now clean Chinese keywords from the LLM)
-  // + optionally the searchGenre for more targeted results
   const keywords = moodProfile.keywords.join(" ");
   const genre = moodProfile.searchGenre || "";
-  const query = `${genre} ${keywords}`.replace(/\s+/g, " ").trim().slice(0, 60);
-  return query || "轻音乐 安静";
+  return `${genre} ${keywords}`.replace(/\s+/g, " ").trim().slice(0, 60) || "轻音乐 安静";
 }
 
 export async function searchQQMusicTracks(
@@ -84,45 +74,40 @@ export async function searchQQMusicTracks(
             num_per_page: Math.min(limit, 40),
             page_num: 1,
             query,
-            search_type: 0, // 0 = song
+            search_type: 0,
           },
         },
       },
     },
   };
 
-  const cookie = makeCookieHeader();
+  const cookie = getCookie();
 
   const response = await fetch(QQ_MUSIC_API, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "User-Agent": USER_AGENT,
       Referer: "https://y.qq.com",
+      Origin: "https://y.qq.com",
       ...(cookie ? { Cookie: cookie } : {}),
     },
     body: JSON.stringify(body),
-    next: { revalidate: 180 },
   });
 
   if (!response.ok) {
     throw new Error(`QQ Music search failed: ${response.status}`);
   }
 
-  const result = await response.json();
+  const result = (await response.json()) as Record<string, unknown>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const searchResult = (result as any)?.music?.search?.SearchCgiService
+    ?.DoSearchForQQMusicDesktop as
+    | { code: number; data: { body: { song: { list: QQMusicSearchSong[] } } } }
+    | undefined;
 
-  const searchData =
-    (result as Record<string, unknown>)?.music as
-      | { search: { SearchCgiService: { DoSearchForQQMusicDesktop: QQMusicSearchBody } } }
-      | undefined;
-
-  const searchResult = searchData?.search?.SearchCgiService?.DoSearchForQQMusicDesktop;
-
-  if (searchResult?.code !== 0 || !searchResult?.data?.body?.song?.list) {
-    throw new Error(
-      `QQ Music search returned no results for query: ${query.slice(0, 60)}`,
-    );
+  if (searchResult?.code !== 0 || !searchResult?.data?.body?.song?.list?.length) {
+    throw new Error(`QQ Music search returned no results for: ${query.slice(0, 60)}`);
   }
 
   return searchResult.data.body.song.list.map((song) => ({
@@ -132,103 +117,114 @@ export async function searchQQMusicTracks(
     artist: song.singer?.map((s) => s.name).join("/") || undefined,
     coverUrl: COVER_TEMPLATE.replace("{albummid}", song.albummid),
     duration: song.interval,
-    tags: [
-      song.albumname,
-      ...moodProfile.keywords.slice(0, 3),
-      moodProfile.scene,
-    ].filter(Boolean),
+    tags: [song.albumname, ...moodProfile.keywords.slice(0, 3), moodProfile.scene].filter(Boolean),
   }));
 }
 
 // ── Play URL (vkey) ─────────────────────────────────────
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = 4000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...init, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-export async function getQQMusicPlayUrl(songmid: string): Promise<string | null> {
-  const cookie = makeCookieHeader();
+export async function getQQMusicPlayUrl(
+  songmid: string,
+): Promise<{ url: string | null; diagnostic: string }> {
+  const cookie = getCookie();
+  const uin = cookie ? parseUin(cookie) : "0";
 
   try {
-    const response = await fetchWithTimeout(
-      QQ_MUSIC_API,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-          Referer: "https://y.qq.com",
-          ...(cookie ? { Cookie: cookie } : {}),
-        },
-        body: JSON.stringify({
-          comm: { uin: 0, format: "json", ct: 24, cv: 0 },
-          req_0: {
-            module: "vkey.GetVkeyServer",
-            method: "CgiGetVkey",
-            param: {
-              guid: guid(),
-              songmid: [songmid],
-              songtype: [0],
-              uin: "0",
-              loginflag: 1,
-              platform: "20",
-            },
-          },
-        }),
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+
+    const response = await fetch(QQ_MUSIC_API, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": USER_AGENT,
+        Referer: "https://y.qq.com",
+        Origin: "https://y.qq.com",
+        ...(cookie ? { Cookie: cookie } : {}),
       },
-    );
+      body: JSON.stringify({
+        comm: {
+          uin: Number(uin) || 0,
+          format: "json",
+          ct: 24,
+          cv: 0,
+        },
+        req_0: {
+          module: "vkey.GetVkeyServer",
+          method: "CgiGetVkey",
+          param: {
+            guid: GLOBAL_GUID,
+            songmid: [songmid],
+            songtype: [0],
+            uin: String(uin),
+            loginflag: cookie ? 1 : 0,
+            platform: "20",
+          },
+        },
+      }),
+      signal: controller.signal,
+    });
 
-    if (!response.ok) return null;
+    clearTimeout(timer);
 
-    const result = await response.json();
-    const vkeyData = (result as Record<string, unknown>)?.req_0 as
-      | QQMusicVkeyBody
-      | undefined;
+    if (!response.ok) {
+      return { url: null, diagnostic: `HTTP ${response.status}` };
+    }
 
-    if (vkeyData?.code !== 0) return null;
+    const result = (await response.json()) as Record<string, unknown>;
+    const vkeyData = (result as Record<string, unknown>)?.req_0 as QQMusicVkeyBody | undefined;
+
+    if (!vkeyData || vkeyData.code !== 0) {
+      return { url: null, diagnostic: `vkey code ${vkeyData?.code ?? "null"}` };
+    }
 
     const info = vkeyData.data.midurlinfo[0];
     const sip = vkeyData.data.sip[0];
 
-    if (info?.purl && sip) {
-      return info.purl.startsWith("http") ? info.purl : `${sip}${info.purl}`;
+    if (!info?.purl) {
+      return {
+        url: null,
+        diagnostic: `purl empty (${info?.filename?.slice(0, 20) || "no filename"})`,
+      };
     }
 
-    return null;
-  } catch {
-    return null;
+    if (!sip) {
+      return { url: null, diagnostic: "no sip" };
+    }
+
+    const playUrl = info.purl.startsWith("http") ? info.purl : `${sip}${info.purl}`;
+    return { url: playUrl, diagnostic: "ok" };
+  } catch (err) {
+    return { url: null, diagnostic: (err as Error).message };
   }
 }
 
-// ── Batch fetch play URLs (parallel with timeout) ────────
+// ── Batch hydrate ───────────────────────────────────────
 
 export async function hydrateQQMusicTracks(
   tracks: PlayableTrack[],
-): Promise<PlayableTrack[]> {
-  // Only hydrate top tracks to avoid excessive API calls
+): Promise<{ tracks: PlayableTrack[]; diagnostics: string[] }> {
   const toHydrate = tracks.filter((t) => t.source === "qqmusic" && !t.audioUrl).slice(0, 8);
+  const diagnostics: string[] = [];
 
-  if (toHydrate.length === 0) return tracks;
+  if (toHydrate.length === 0) {
+    return { tracks: tracks.filter((t) => t.audioUrl), diagnostics };
+  }
 
   const results = await Promise.all(
     toHydrate.map(async (track) => {
       const songmid = track.id.replace("qqmusic_", "");
-      const playUrl = await getQQMusicPlayUrl(songmid);
-      return { ...track, audioUrl: playUrl || undefined };
+      const { url, diagnostic } = await getQQMusicPlayUrl(songmid);
+      diagnostics.push(`${track.title.slice(0, 20)}: ${diagnostic}`);
+      return { ...track, audioUrl: url || undefined };
     }),
   );
 
-  // Build map for quick lookup
   const hydratedMap = new Map(results.map((t) => [t.id, t]));
 
-  return tracks
+  const hydrated = tracks
     .map((t) => hydratedMap.get(t.id) || t)
     .filter((t) => t.audioUrl);
+
+  return { tracks: hydrated, diagnostics };
 }

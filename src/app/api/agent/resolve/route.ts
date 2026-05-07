@@ -257,11 +257,12 @@ export async function POST(request: Request) {
 
     // Step 5: Hydrate play URLs
     if (candidates.length > 0) {
-      const hydrated = await hydrateQQMusicTracks(candidates);
-      if (hydrated.length > 0) {
-        candidates = hydrated;
+      const result = await hydrateQQMusicTracks(candidates);
+      diagnostics.push(...result.diagnostics.map((d) => `vkey: ${d}`));
+      if (result.tracks.length > 0) {
+        candidates = result.tracks;
       } else {
-        diagnostics.push("QQ Music tracks had no playable URLs.");
+        diagnostics.push("All QQ Music tracks had empty play URLs (no vkey).");
         candidates = [];
       }
     }
