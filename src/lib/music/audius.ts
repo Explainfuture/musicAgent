@@ -20,6 +20,7 @@ type AudiusTrack = {
   };
   stream?: {
     url?: string;
+    mirrors?: string[];
   };
 };
 
@@ -28,6 +29,17 @@ type AudiusResponse<T> = {
 };
 
 const AUDIUS_APP_NAME = "musicAgentMvp";
+
+function buildAudiusProxyUrl(track: AudiusTrack) {
+  const params = new URLSearchParams();
+  params.set("url", track.stream?.url ?? "");
+
+  for (const mirror of track.stream?.mirrors ?? []) {
+    params.append("mirror", mirror);
+  }
+
+  return `/api/music/stream/audius/${track.id}?${params.toString()}`;
+}
 
 async function getAudiusHost() {
   const response = await fetch("https://api.audius.co", {
@@ -76,9 +88,7 @@ export async function searchAudiusTracks(
       source: "audius",
       title: track.title,
       artist: track.user?.name,
-      audioUrl: `/api/music/stream/audius/${track.id}?url=${encodeURIComponent(
-        track.stream?.url ?? "",
-      )}`,
+      audioUrl: buildAudiusProxyUrl(track),
       coverUrl:
         track.artwork?.["480x480"] ||
         track.artwork?.["1000x1000"] ||

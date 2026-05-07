@@ -1,4 +1,4 @@
-export type MusicSource = "jamendo" | "audius";
+export type MusicSource = "jamendo" | "audius" | "qqmusic" | "direct";
 
 export type PlayableTrack = {
   id: string;

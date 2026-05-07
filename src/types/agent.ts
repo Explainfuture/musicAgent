@@ -17,6 +17,9 @@ export type MoodProfile = {
   valence: "sad" | "warm" | "neutral" | "happy";
   avoid: string[];
   keywords: string[];
+  searchGenre?: string;
+  searchLanguage?: "zh-CN" | "en" | "any";
+  bpmHint?: string;
   summary: string;
 };
 
@@ -40,11 +43,16 @@ export type AgentResolveRequest = {
   text: string;
   previousTrackIds?: string[];
   feedbackMemory?: FeedbackRecord[];
+  recentConversation?: Array<{ role: "user" | "agent"; content: string }>;
 };
 
 export type AgentResolveResponse = {
-  moodProfile: MoodProfile;
-  track: PlayableTrack;
-  explanationSegments: string[];
+  intent: "music" | "chat";
+  // Music mode
+  moodProfile?: MoodProfile;
+  track?: PlayableTrack;
+  explanationSegments?: string[];
+  // Chat mode
+  chatReply?: string;
   sourceDiagnostics?: string[];
 };

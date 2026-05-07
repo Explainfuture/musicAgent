@@ -28,7 +28,14 @@ export function scoreTrack(track: PlayableTrack, moodProfile: MoodProfile) {
     const normalized = avoid.replace("too_", "");
     return text.includes(normalized) ? score + 3 : score;
   }, 0);
-  const sourceScore = track.source === "jamendo" ? 3 : track.source === "audius" ? 2 : 1;
+  const sourceScore =
+    track.source === "qqmusic"
+      ? 5
+      : track.source === "jamendo"
+        ? 3
+        : track.source === "audius"
+          ? 2
+          : 1.5;
 
   return keywordScore + sourceScore - avoidPenalty;
 }

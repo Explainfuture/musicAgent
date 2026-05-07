@@ -20,29 +20,29 @@ export function ExplanationStream({
 
     const timeoutId = window.setTimeout(() => {
       setVisibleCount((count) => Math.min(count + 1, segments.length));
-    }, 1300);
+    }, 1600);
 
     return () => window.clearTimeout(timeoutId);
   }, [active, segments.length, visibleCount]);
 
   if (segments.length === 0) {
+    if (!active) return null;
     return (
-      <div className="rounded-xl border border-white/10 bg-black/30 p-4 text-sm text-emerald-700">
-        $ explain --waiting<br />
-        播放后，我会慢慢告诉你为什么是这首。
+      <div className="rounded-2xl bg-rose-pink/5 px-4 py-3 text-[12px] leading-relaxed text-muted-plum/70">
+        播放后，我会告诉你为什么选了这首歌...
       </div>
     );
   }
 
   return (
-    <div className="space-y-2 rounded-xl border border-white/10 bg-black/30 p-4">
+    <div className="space-y-2">
       {segments.slice(0, visibleCount).map((segment, index) => (
-        <p
-          key={`${segment}-${index}`}
-          className="rounded-xl bg-emerald-400/10 px-3 py-2 text-sm leading-6 text-emerald-50"
+        <div
+          key={index}
+          className="animate-fade-in-up rounded-[18px] rounded-bl-md bg-white/75 px-4 py-2.5 text-[13px] leading-relaxed text-plum shadow-[0_1px_8px_rgba(180,120,140,0.05)]"
         >
           {segment}
-        </p>
+        </div>
       ))}
     </div>
   );

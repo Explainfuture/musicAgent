@@ -40,6 +40,9 @@ export function fallbackParseMood(text: string): MoodProfile {
     valence: isSad ? "warm" : "neutral",
     avoid,
     keywords: Array.from(keywords).slice(0, 8),
+    searchGenre: isCoding ? "lofi 器乐" : wantsCalm ? "轻音乐 钢琴" : "华语流行",
+    searchLanguage: "zh-CN",
+    bpmHint: isTired || wantsCalm ? "60-90" : "80-120",
     summary: isCoding
       ? "用户正在写代码，需要低干扰、稳定、不过分刺激的音乐。"
       : "用户需要一首温和、低打扰、能接住当前状态的音乐。",

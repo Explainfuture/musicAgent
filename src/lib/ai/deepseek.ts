@@ -1,22 +1,42 @@
 type DeepSeekMessage = {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
+  tool_call_id?: string;
+};
+
+type ToolCall = {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
 };
 
 type DeepSeekResponse = {
   choices?: Array<{
     message?: {
-      content?: string;
+      content?: string | null;
+      tool_calls?: ToolCall[];
     };
+    finish_reason?: string;
   }>;
 };
 
+type ToolDefinition = {
+  type: "function";
+  function: {
+    name: string;
+    description: string;
+    parameters: Record<string, unknown>;
+  };
+};
+
+// ── JSON mode (existing) ──────────────────────────────
+
 export async function callDeepSeekJson<T>(messages: DeepSeekMessage[]): Promise<T> {
   const apiKey = process.env.DEEPSEEK_API_KEY;
-
-  if (!apiKey) {
-    throw new Error("DEEPSEEK_API_KEY is not configured.");
-  }
+  if (!apiKey) throw new Error("DEEPSEEK_API_KEY is not configured.");
 
   const response = await fetch("https://api.deepseek.com/chat/completions", {
     method: "POST",
@@ -38,10 +58,53 @@ export async function callDeepSeekJson<T>(messages: DeepSeekMessage[]): Promise<
 
   const data = (await response.json()) as DeepSeekResponse;
   const content = data.choices?.[0]?.message?.content;
-
-  if (!content) {
-    throw new Error("DeepSeek response is empty.");
-  }
+  if (!content) throw new Error("DeepSeek response is empty.");
 
   return JSON.parse(content) as T;
+}
+
+// ── Tool calling mode (new) ─────────────────────────────
+
+export async function callDeepSeekWithTools(input: {
+  messages: DeepSeekMessage[];
+  tools: ToolDefinition[];
+  toolChoice?: "auto" | "required" | { type: "function"; function: { name: string } };
+}): Promise<{
+  toolCalls: Array<{ name: string; arguments: Record<string, unknown> }>;
+  content: string | null;
+}> {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) throw new Error("DEEPSEEK_API_KEY is not configured.");
+
+  const response = await fetch("https://api.deepseek.com/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: process.env.DEEPSEEK_MODEL || "deepseek-chat",
+      messages: input.messages,
+      tools: input.tools,
+      tool_choice: input.toolChoice || "auto",
+      temperature: 0.6,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`DeepSeek tool call failed: ${response.status}`);
+  }
+
+  const data = (await response.json()) as DeepSeekResponse;
+  const choice = data.choices?.[0];
+
+  const toolCalls = (choice?.message?.tool_calls || []).map((tc) => ({
+    name: tc.function.name,
+    arguments: JSON.parse(tc.function.arguments) as Record<string, unknown>,
+  }));
+
+  return {
+    toolCalls,
+    content: choice?.message?.content || null,
+  };
 }

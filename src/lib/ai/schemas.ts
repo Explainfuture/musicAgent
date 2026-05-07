@@ -7,12 +7,15 @@ export const moodProfileSchema = z.object({
   valence: z.enum(["sad", "warm", "neutral", "happy"]),
   avoid: z.array(z.string()),
   keywords: z.array(z.string()).min(1),
+  searchGenre: z.string().optional(),
+  searchLanguage: z.enum(["zh-CN", "en", "any"]).optional(),
+  bpmHint: z.string().optional(),
   summary: z.string().min(1),
 });
 
 export const playableTrackSchema = z.object({
   id: z.string().min(1),
-  source: z.enum(["jamendo", "audius"]),
+  source: z.enum(["jamendo", "audius", "qqmusic", "direct"]),
   title: z.string().min(1),
   artist: z.string().optional(),
   audioUrl: z.string().min(1).optional(),

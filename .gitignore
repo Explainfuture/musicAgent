@@ -13,3 +13,7 @@ yarn-error.log*
 pnpm-debug.log*
 
 *.tsbuildinfo
+
+# QQ Music auth
+.qqmusic-cookie
+.qqmusic-cookie.json

@@ -1,16 +1,21 @@
 import { NextResponse } from "next/server";
 import { fallbackParseMood } from "@/lib/ai/fallbackMood";
-import { callDeepSeekJson } from "@/lib/ai/deepseek";
+import { callDeepSeekJson, callDeepSeekWithTools } from "@/lib/ai/deepseek";
 import {
   agentSystemPrompt,
+  buildChatPrompt,
   buildFallbackExplanation,
+  buildIntentPrompt,
   buildMoodPrompt,
   buildSelectionPrompt,
+  musicAgentTools,
 } from "@/lib/ai/prompts";
 import { moodProfileSchema, selectedTrackSchema } from "@/lib/ai/schemas";
 import { searchAudiusTracks } from "@/lib/music/audius";
+import { fallbackTracks } from "@/lib/music/fallbackTracks";
 import { searchJamendoTracks } from "@/lib/music/jamendo";
 import { rankTracks } from "@/lib/music/normalize";
+import { searchQQMusicTracks, hydrateQQMusicTracks } from "@/lib/music/qqmusic";
 import type {
   AgentResolveRequest,
   AgentResolveResponse,
@@ -18,24 +23,61 @@ import type {
 } from "@/types/agent";
 import type { PlayableTrack } from "@/types/music";
 
-async function parseMood(text: string, diagnostics: string[]): Promise<MoodProfile> {
-  try {
-    const result = await callDeepSeekJson<unknown>([
-      { role: "system", content: agentSystemPrompt },
-      { role: "user", content: buildMoodPrompt(text) },
-    ]);
+// ── Intent classification ─────────────────────────────
 
-    return moodProfileSchema.parse(result);
-  } catch (error) {
-    diagnostics.push(`DeepSeek mood fallback: ${(error as Error).message}`);
-    return fallbackParseMood(text);
+async function classifyIntent(
+  text: string,
+  hasTrack: boolean,
+): Promise<"music" | "chat"> {
+  try {
+    const result = await callDeepSeekJson<{ intent: "music" | "chat" }>([
+      { role: "system", content: agentSystemPrompt },
+      { role: "user", content: buildIntentPrompt(text, hasTrack) },
+    ]);
+    return result.intent === "chat" ? "chat" : "music";
+  } catch {
+    // Default to music if classification fails
+    const chatPatterns = /^(谢谢|你好|嗨|哈喽|hello|hi|你是谁|你能|你会|可以|总结|介绍|帮我看|什么是)/i;
+    return chatPatterns.test(text.trim()) ? "chat" : "music";
   }
 }
 
+// ── Chat response ─────────────────────────────────────
+
+async function chatReply(
+  userText: string,
+  recentConversation: Array<{ role: "user" | "agent"; content: string }>,
+): Promise<string> {
+  try {
+    const result = await callDeepSeekJson<{ reply: string }>([
+      { role: "system", content: agentSystemPrompt },
+      {
+        role: "user",
+        content: buildChatPrompt(userText, recentConversation),
+      },
+    ]);
+    return result.reply;
+  } catch {
+    return "我在听。告诉我你现在的感受，或者想听什么样的歌？";
+  }
+}
+
+// ── Search candidates ─────────────────────────────────
+
 async function searchCandidates(moodProfile: MoodProfile, diagnostics: string[]) {
+  // Build a clean, short search query for QQ Music
+  // Use searchGenre + a subset of keywords for optimal matching
+  const genre = moodProfile.searchGenre || "";
+  const cleanKeywords = moodProfile.keywords.slice(0, 3);
+  const searchProfile = {
+    ...moodProfile,
+    keywords: [...cleanKeywords, genre].filter(Boolean).slice(0, 4),
+  };
+
   const groups = await Promise.allSettled([
     searchJamendoTracks(moodProfile),
     searchAudiusTracks(moodProfile),
+    searchQQMusicTracks(searchProfile),
   ]);
 
   const candidates: PlayableTrack[] = [];
@@ -44,12 +86,16 @@ async function searchCandidates(moodProfile: MoodProfile, diagnostics: string[])
     if (group.status === "fulfilled") {
       candidates.push(...group.value);
     } else {
-      diagnostics.push(group.reason instanceof Error ? group.reason.message : String(group.reason));
+      diagnostics.push(
+        group.reason instanceof Error ? group.reason.message : String(group.reason),
+      );
     }
   }
 
   return candidates;
 }
+
+// ── Select final track ────────────────────────────────
 
 async function selectTrack(input: {
   userText: string;
@@ -79,7 +125,9 @@ async function selectTrack(input: {
       explanationSegments: selection.explanationSegments,
     };
   } catch (error) {
-    input.diagnostics.push(`DeepSeek selection fallback: ${(error as Error).message}`);
+    input.diagnostics.push(
+      `DeepSeek selection fallback: ${(error as Error).message}`,
+    );
     const track = input.candidates[0];
 
     return {
@@ -93,6 +141,69 @@ async function selectTrack(input: {
   }
 }
 
+// ── Tool calling flow ─────────────────────────────────
+
+async function analyzeWithTools(text: string, diagnostics: string[]) {
+  const result = await callDeepSeekWithTools({
+    messages: [
+      { role: "system", content: agentSystemPrompt },
+      {
+        role: "user",
+        content: `用户说："${text}"。如果用户想要音乐，请调用 analyze_and_search 工具。`,
+      },
+    ],
+    tools: musicAgentTools,
+    toolChoice: "auto",
+  });
+
+  const toolCall = result.toolCalls.find((tc) => tc.name === "analyze_and_search");
+
+  if (!toolCall) {
+    // LLM chose not to call the tool — this might be a chat
+    return null;
+  }
+
+  const args = toolCall.arguments as {
+    moodAnalysis: Record<string, unknown>;
+    searchStrategy: Record<string, unknown>;
+    userSummary: string;
+  };
+
+  const moodProfile: MoodProfile = {
+    scene: String(args.moodAnalysis.scene || "daily"),
+    mood: Array.isArray(args.moodAnalysis.mood)
+      ? args.moodAnalysis.mood.map(String)
+      : ["neutral"],
+    energy: (["low", "medium", "high"].includes(String(args.moodAnalysis.energy))
+      ? String(args.moodAnalysis.energy)
+      : "medium") as MoodProfile["energy"],
+    valence: (["sad", "warm", "neutral", "happy"].includes(
+      String(args.moodAnalysis.valence),
+    )
+      ? String(args.moodAnalysis.valence)
+      : "warm") as MoodProfile["valence"],
+    avoid: Array.isArray(args.moodAnalysis.avoid)
+      ? args.moodAnalysis.avoid.map(String)
+      : [],
+    keywords: Array.isArray(args.searchStrategy.keywords)
+      ? args.searchStrategy.keywords.map(String)
+      : [],
+    searchGenre: String(args.searchStrategy.genre || ""),
+    searchLanguage: "zh-CN",
+    summary: String(args.userSummary || ""),
+  };
+
+  const parsed = moodProfileSchema.safeParse(moodProfile);
+  if (!parsed.success) {
+    diagnostics.push(`Tool call validation: ${parsed.error.message}`);
+    return null;
+  }
+
+  return parsed.data;
+}
+
+// ── Main API handler ──────────────────────────────────
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as AgentResolveRequest;
@@ -102,14 +213,84 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "请输入当前状态。" }, { status: 400 });
     }
 
+    const hasTrack = Boolean(body.previousTrackIds?.length);
     const diagnostics: string[] = [];
-    const moodProfile = await parseMood(text, diagnostics);
-    const candidates = rankTracks(
-      await searchCandidates(moodProfile, diagnostics),
+
+    // Step 1: Classify intent — chat or music?
+    const intent = await classifyIntent(text, hasTrack);
+    diagnostics.push(`Intent: ${intent}`);
+
+    // Chat path — respond conversationally, no music search
+    if (intent === "chat") {
+      const reply = await chatReply(text, body.recentConversation || []);
+      return NextResponse.json({
+        intent: "chat" as const,
+        chatReply: reply,
+        sourceDiagnostics: diagnostics,
+      });
+    }
+
+    // Music path — full flow
+    // Step 2: Analyze mood with tools
+    let moodProfile: MoodProfile;
+
+    try {
+      const toolResult = await analyzeWithTools(text, diagnostics);
+      if (toolResult) {
+        moodProfile = toolResult;
+      } else {
+        throw new Error("Tool calling returned no result.");
+      }
+    } catch (error) {
+      diagnostics.push(
+        `Tool calling failed: ${(error as Error).message}. Falling back.`,
+      );
+      try {
+        const result = await callDeepSeekJson<unknown>([
+          { role: "system", content: agentSystemPrompt },
+          { role: "user", content: buildMoodPrompt(text) },
+        ]);
+        moodProfile = moodProfileSchema.parse(result);
+      } catch (fallbackError) {
+        diagnostics.push(`JSON fallback: ${(fallbackError as Error).message}`);
+        moodProfile = fallbackParseMood(text);
+      }
+    }
+
+    // Step 3: Search
+    const rawCandidates = await searchCandidates(moodProfile, diagnostics);
+
+    // Step 4: Rank and filter
+    let candidates = rankTracks(
+      rawCandidates,
       moodProfile,
       body.previousTrackIds,
     ).slice(0, 10);
 
+    if (candidates.length === 0 && body.previousTrackIds?.length) {
+      candidates = rankTracks(rawCandidates, moodProfile, []).slice(0, 10);
+    }
+
+    // Step 5: Hydrate QQ Music
+    const qqTracks = candidates.filter((t) => t.source === "qqmusic");
+    if (qqTracks.length > 0) {
+      const hydrated = await hydrateQQMusicTracks(qqTracks);
+      if (hydrated.length > 0) {
+        candidates = [...hydrated, ...candidates.filter((t) => t.source !== "qqmusic")];
+      } else {
+        diagnostics.push("QQ Music tracks had no playable URLs.");
+        candidates = candidates.filter((t) => t.source !== "qqmusic");
+      }
+    }
+
+    // Step 6: Fallback
+    if (candidates.length === 0) {
+      diagnostics.push("Falling back to direct tracks.");
+      candidates = rankTracks(fallbackTracks, moodProfile, body.previousTrackIds).slice(0, 10);
+    }
+    if (candidates.length === 0) {
+      candidates = rankTracks(fallbackTracks, moodProfile, []).slice(0, 10);
+    }
     if (candidates.length === 0) {
       return NextResponse.json(
         { error: "暂时没有找到可播放的音乐。" },
@@ -117,6 +298,7 @@ export async function POST(request: Request) {
       );
     }
 
+    // Step 7: AI selects
     const selection = await selectTrack({
       userText: text,
       moodProfile,
@@ -124,17 +306,16 @@ export async function POST(request: Request) {
       diagnostics,
     });
 
-    const response: AgentResolveResponse = {
+    return NextResponse.json({
+      intent: "music" as const,
       moodProfile,
       track: selection.track,
       explanationSegments: selection.explanationSegments,
       sourceDiagnostics: diagnostics,
-    };
-
-    return NextResponse.json(response);
+    });
   } catch (error) {
     return NextResponse.json(
-      { error: (error as Error).message || "Agent 暂时没接住，我再试一次。" },
+      { error: (error as Error).message || "Agent 暂时没接住。" },
       { status: 500 },
     );
   }
