@@ -1,11 +1,10 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AgentOrb } from "./AgentOrb";
 import { ExplanationStream } from "./ExplanationStream";
 import { MicButton } from "./MicButton";
-import { MoodInput } from "./MoodInput";
 import { PlayerCard } from "./PlayerCard";
 import { StatusIndicator } from "./StatusIndicator";
 import { Button } from "@/components/ui/button";
@@ -13,7 +12,7 @@ import { readFeedbackMemory, saveFeedbackRecord } from "@/lib/storage/feedbackMe
 import { useSpeechRecognition } from "@/lib/speech/useSpeechRecognition";
 import { cn } from "@/lib/utils";
 import type { AgentResolveResponse, AgentStatus, AgentToolTrace } from "@/types/agent";
-import { Music, LogIn, CheckCircle2, LogOut } from "lucide-react";
+import { Music, LogIn, CheckCircle2, LogOut, AudioLines } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -26,6 +25,7 @@ export function MusicAgentWindow() {
   const [inputText, setInputText] = useState("");
   const [lastSubmitted, setLastSubmitted] = useState("");
   const [response, setResponse] = useState<AgentResolveResponse | null>(null);
+  const [explanationSegments, setExplanationSegments] = useState<string[]>([]);
   const [prevIds, setPrevIds] = useState<string[]>([]);
   const [notice, setNotice] = useState("");
   const [toolTrace, setToolTrace] = useState<AgentToolTrace[]>([]);
@@ -37,7 +37,6 @@ export function MusicAgentWindow() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const track = response?.track ?? null;
-  const explanationSegments = response?.explanationSegments ?? [];
 
   // QQ Music auth check
   useEffect(() => {
@@ -84,6 +83,7 @@ export function MusicAgentWindow() {
       setNotice("");
       setStatus("thinking");
       setToolTrace([{ step: "思考", status: "running", detail: "正在理解你的输入并规划处理步骤..." }]);
+      setExplanationSegments([]);
       setLastSubmitted(trimmed);
 
       const allPrevIds = Array.from(new Set([...prevIds, ...extraPrevIds]));
@@ -114,12 +114,14 @@ export function MusicAgentWindow() {
           setMessages((p) => [...p, { role: "agent", content: data.chatReply! }]);
           setStatus("idle");
           setToolTrace([]);
+          setExplanationSegments([]);
           return;
         }
 
         // Music mode
         if (data.track) {
           setResponse(data);
+          setExplanationSegments(data.explanationSegments ?? []);
           setPrevIds((ids) => Array.from(new Set([...ids, data.track!.id])));
           setMessages((p) => [
             ...p,
@@ -235,25 +237,10 @@ export function MusicAgentWindow() {
           <StatusIndicator status={status} />
         </div>
 
-        {/* Bottom: Mood Input */}
-        <div className="flex-1 flex flex-col justify-end px-3 pb-4">
-          <MoodInput
-            inputText={inputText}
-            setInputText={setInputText}
-            canSubmit={canSubmit}
-            onSubmit={handleSubmit}
-            isSearching={status === "thinking" || status === "searching"}
-            isListening={speech.isListening}
-            isSpeechSupported={speech.isSupported}
-            interimText={speech.interimText}
-            onMicStart={() => { setStatus("listening"); speech.start(); }}
-            onMicStop={speech.stop}
-          />
-        </div>
       </div>
 
       {/* ===== CENTER: Player (hero) ===== */}
-      <div className="flex w-[38%] min-w-[340px] shrink-0 flex-col items-center justify-center border-r border-border/40 px-6">
+      <div className="flex w-[38%] min-w-[340px] shrink-0 flex-col items-center justify-start border-r border-border/40 px-6 pt-10">
         <AnimatePresence mode="wait">
           {track ? (
             <motion.div
@@ -291,6 +278,19 @@ export function MusicAgentWindow() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        <div className="mt-6 w-full max-w-[360px] rounded-2xl border border-border/50 bg-surface/70 p-4">
+          <div className="mb-2 flex items-center gap-2 text-xs font-medium text-foreground/70">
+            <AudioLines size={14} className="text-rose/70" /> 当前歌词
+          </div>
+          <div className="max-h-[220px] overflow-y-auto pr-1 text-sm leading-7 text-foreground/75">
+            {track?.lyrics ? (
+              <pre className="whitespace-pre-wrap font-sans">{track.lyrics}</pre>
+            ) : (
+              <p className="text-muted/60">这首歌暂时没有可用歌词，先让旋律陪你一会儿。</p>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* ===== RIGHT: Chat Flow ===== */}
@@ -333,7 +333,7 @@ export function MusicAgentWindow() {
               active={status === "playing" || status === "paused"}
             />
 
-            {toolTrace.length > 0 && (
+            {process.env.NODE_ENV === "development" && toolTrace.length > 0 && (
               <div className="space-y-1">
                 {toolTrace.map((t, idx) => (
                   <div key={`${t.step}-${idx}`} className="rounded-xl bg-surface/60 px-3 py-2 text-xs text-foreground/70">
