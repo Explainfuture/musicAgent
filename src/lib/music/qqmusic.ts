@@ -35,6 +35,7 @@ type MusicuSearchResponse = {
 
 const SEARCH_API = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp";
 const SEARCH_API_FALLBACK = "https://u.y.qq.com/cgi-bin/musicu.fcg";
+const LYRIC_API = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg";
 const COVER_TEMPLATE = "https://y.qq.com/music/photo_new/T002R300x300M000{albummid}.jpg";
 
 const USER_AGENT =
@@ -140,4 +141,39 @@ export async function searchQQMusicTracks(moodProfile: MoodProfile, limit = 15):
   }
 
   return toPlayableTracks(songs, moodProfile);
+}
+
+function decodeBase64Utf8(text: string) {
+  try {
+    return Buffer.from(text, "base64").toString("utf-8");
+  } catch {
+    return "";
+  }
+}
+
+export async function fetchQQMusicLyrics(songmid: string, cookie = ""): Promise<string> {
+  const params = new URLSearchParams({
+    songmid,
+    format: "json",
+    nobase64: "0",
+    g_tk: "5381",
+  });
+
+  const response = await fetch(`${LYRIC_API}?${params}`, {
+    headers: {
+      "User-Agent": USER_AGENT,
+      Referer: "https://y.qq.com",
+      ...(cookie ? { Cookie: cookie } : {}),
+    },
+  });
+
+  if (!response.ok) return "";
+  const data = (await response.json()) as { lyric?: string };
+  const raw = decodeBase64Utf8(data.lyric || "");
+  return raw
+    .replace(/\[[^\]]*\]/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
 }

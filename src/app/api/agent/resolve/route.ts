@@ -12,7 +12,7 @@ import {
 } from "@/lib/ai/prompts";
 import { moodProfileSchema, selectedTrackSchema } from "@/lib/ai/schemas";
 import { rankTracks } from "@/lib/music/normalize";
-import { searchQQMusicTracks } from "@/lib/music/qqmusic";
+import { fetchQQMusicLyrics, searchQQMusicTracks } from "@/lib/music/qqmusic";
 import { fallbackTracks } from "@/lib/music/fallbackTracks";
 import type {
   AgentResolveRequest,
@@ -295,6 +295,23 @@ export async function POST(request: Request) {
     });
 
     toolTrace.push({ step: "选歌结果", status: "success", detail: `已选择：${selection.track.title}` });
+
+    if (selection.track.source === "qqmusic") {
+      toolTrace.push({ step: "歌词", status: "running", detail: "正在拉取 QQ 音乐歌词..." });
+      const songmid = selection.track.id.replace("qqmusic_", "");
+      try {
+        const lyrics = await fetchQQMusicLyrics(songmid);
+        if (lyrics) {
+          selection.track = { ...selection.track, lyrics };
+          toolTrace.push({ step: "歌词结果", status: "success", detail: `歌词行数：${lyrics.split("\n").length}` });
+        } else {
+          toolTrace.push({ step: "歌词结果", status: "failed", detail: "未返回可用歌词。" });
+        }
+      } catch (lyricError) {
+        diagnostics.push(`QQ lyric failed: ${(lyricError as Error).message}`);
+        toolTrace.push({ step: "歌词结果", status: "failed", detail: "歌词请求失败。" });
+      }
+    }
 
     return NextResponse.json({
       intent: "music" as const,

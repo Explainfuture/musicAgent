@@ -87,7 +87,7 @@ export function PlayerCard({
     }
   }, [track, onError, getQQMusicFriendlyNotice]);
 
-  const effectiveUrl = resolvedUrl || track?.audioUrl;
+  const effectiveUrl = resolvedUrl || track?.audioUrl || null;
 
   const attemptPlay = useCallback(async () => {
     const a = audioRef.current;
@@ -241,20 +241,22 @@ export function PlayerCard({
         </p>
       )}
 
-      <audio
-        ref={audioRef}
-        src={effectiveUrl || ""}
-        autoPlay
-        preload="auto"
-        className="hidden"
-        onCanPlay={() => void attemptPlay()}
-        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
-        onTimeUpdate={(e) => { if (!seeking) setCurrentTime(e.currentTarget.currentTime || 0); }}
-        onPlay={onPlay}
-        onPause={onPause}
-        onEnded={onNext}
-        onError={() => { setNotice("播放失败，让我换一首"); onError(); }}
-      />
+      {effectiveUrl && (
+        <audio
+          ref={audioRef}
+          src={effectiveUrl}
+          autoPlay
+          preload="auto"
+          className="hidden"
+          onCanPlay={() => void attemptPlay()}
+          onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
+          onTimeUpdate={(e) => { if (!seeking) setCurrentTime(e.currentTarget.currentTime || 0); }}
+          onPlay={onPlay}
+          onPause={onPause}
+          onEnded={onNext}
+          onError={() => { setNotice("播放失败，让我换一首"); onError(); }}
+        />
+      )}
     </motion.div>
   );
 }

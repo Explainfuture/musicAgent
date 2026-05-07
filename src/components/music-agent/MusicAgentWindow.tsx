@@ -12,7 +12,8 @@ import { readFeedbackMemory, saveFeedbackRecord } from "@/lib/storage/feedbackMe
 import { useSpeechRecognition } from "@/lib/speech/useSpeechRecognition";
 import { cn } from "@/lib/utils";
 import type { AgentResolveResponse, AgentStatus, AgentToolTrace } from "@/types/agent";
-import { Music, LogIn, CheckCircle2, LogOut, AudioLines } from "lucide-react";
+import type { PlayableTrack } from "@/types/music";
+import { Music, LogIn, CheckCircle2, LogOut, AudioLines, ChevronDown, ChevronRight } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -36,6 +37,8 @@ export function MusicAgentWindow() {
   const [qqLoggingIn, setQqLoggingIn] = useState(false);
   const [playbackTime, setPlaybackTime] = useState(0);
   const [playbackDuration, setPlaybackDuration] = useState(0);
+  const [playHistory, setPlayHistory] = useState<PlayableTrack[]>([]);
+  const [toolTraceExpanded, setToolTraceExpanded] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const track = response?.track ?? null;
@@ -134,6 +137,10 @@ export function MusicAgentWindow() {
         // Music mode
         if (data.track) {
           setResponse(data);
+          setPlayHistory((prev) => {
+            const next = [data.track!, ...prev.filter((item) => item.id !== data.track!.id)];
+            return next.slice(0, 40);
+          });
           setExplanationSegments(data.explanationSegments ?? []);
           setPrevIds((ids) => Array.from(new Set([...ids, data.track!.id])));
           setMessages((p) => [
@@ -185,9 +192,10 @@ export function MusicAgentWindow() {
   const handlePlay = useCallback(() => setStatus("playing"), []);
   const handlePause = useCallback(() => setStatus("paused"), []);
   const handlePlayerError = useCallback(() => {
-    setStatus("error"); setNotice("播放出错了。");
-    if (track && lastSubmitted) setTimeout(handleNext, 500);
-  }, [handleNext, lastSubmitted, track]);
+    setStatus("error");
+    setNotice("播放出错了，请点击下一首或重新描述感受。",
+    );
+  }, []);
 
   const canSubmit = useMemo(
     () => inputText.trim().length > 0 && !["thinking", "searching"].includes(status),
@@ -247,7 +255,38 @@ export function MusicAgentWindow() {
             </button>
           )}
 
-          <StatusIndicator status={status} />
+          <StatusIndicator status={status} detail={toolTrace.find((t) => t.status === "running")?.detail} />
+        </div>
+
+        <div className="min-h-0 flex-1 px-3 pb-3">
+          <div className="h-full rounded-2xl border border-border/60 bg-white/55 p-3 shadow-sm backdrop-blur-sm">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-xs font-semibold text-foreground/70">历史播放</h3>
+              <span className="text-[10px] text-muted/60">{playHistory.length} 首</span>
+            </div>
+
+            {playHistory.length === 0 ? (
+              <p className="rounded-xl bg-surface/60 px-3 py-2 text-[11px] text-muted/60">
+                还没有播放记录，先听一首歌吧。
+              </p>
+            ) : (
+              <div className="max-h-full space-y-2 overflow-y-auto pr-1">
+                {playHistory.map((item) => (
+                  <div key={item.id} className="flex items-center gap-2 rounded-xl border border-white/70 bg-surface/65 px-2.5 py-2">
+                    <div className="h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-rose-surface">
+                      {item.coverUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={item.coverUrl} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-rose/40">♪</div>
+                      )}
+                    </div>
+                    <p className="line-clamp-2 text-xs leading-4 text-foreground/80">{item.title}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
       </div>
@@ -363,14 +402,32 @@ export function MusicAgentWindow() {
               active={status === "playing" || status === "paused"}
             />
 
-            {process.env.NODE_ENV === "development" && toolTrace.length > 0 && (
-              <div className="space-y-1">
-                {toolTrace.map((t, idx) => (
-                  <div key={`${t.step}-${idx}`} className="rounded-xl bg-surface/60 px-3 py-2 text-xs text-foreground/70">
-                    <span className="mr-1">{t.status === "running" ? "⏳" : t.status === "success" ? "✅" : "⚠️"}</span>
-                    <span className="font-medium">{t.step}:</span> {t.detail}
+            {toolTrace.length > 0 && (
+              <div className="rounded-xl border border-border/40 bg-surface/55 p-2">
+                <button
+                  type="button"
+                  onClick={() => setToolTraceExpanded((v) => !v)}
+                  className="flex w-full items-center justify-between text-left"
+                >
+                  <span className="text-xs font-medium text-foreground/75">工具执行状态</span>
+                  {toolTraceExpanded ? <ChevronDown size={14} className="text-muted/70" /> : <ChevronRight size={14} className="text-muted/70" />}
+                </button>
+
+                <div className="mt-1 rounded-lg bg-white/50 px-2 py-1.5 text-xs text-foreground/70">
+                  <span className="mr-1">⏳</span>
+                  {toolTrace.find((t) => t.status === "running")?.detail || toolTrace.at(-1)?.detail}
+                </div>
+
+                {toolTraceExpanded && (
+                  <div className="mt-2 space-y-1">
+                    {toolTrace.map((t, idx) => (
+                      <div key={`${t.step}-${idx}`} className="rounded-lg bg-surface/70 px-2.5 py-1.5 text-xs text-foreground/70">
+                        <span className="mr-1">{t.status === "running" ? "⏳" : t.status === "success" ? "✅" : "⚠️"}</span>
+                        <span className="font-medium">{t.step}:</span> {t.detail}
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
             )}
 
@@ -412,7 +469,7 @@ export function MusicAgentWindow() {
               onChange={(e) => setInputText(e.target.value)}
               placeholder="说说你现在的感受，或者跟我聊聊天..."
               rows={2}
-              className="w-full resize-none rounded-2xl border border-border/50 bg-surface/70 px-4 py-2.5 pr-20 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted/35 transition-colors focus:border-rose/20 focus:bg-surface"
+              className="w-full resize-none rounded-2xl border border-border/50 bg-surface/70 px-4 py-2.5 pr-32 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted/35 transition-colors focus:border-rose/20 focus:bg-surface"
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
@@ -420,7 +477,7 @@ export function MusicAgentWindow() {
                 }
               }}
             />
-            <div className="absolute bottom-2 right-2 flex items-center gap-1">
+            <div className="absolute bottom-2 right-2 flex max-w-[45%] items-center justify-end gap-1">
               <MicButton
                 isListening={speech.isListening}
                 isSupported={speech.isSupported}
