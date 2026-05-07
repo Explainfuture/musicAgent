@@ -9,4 +9,5 @@ export type PlayableTrack = {
   coverUrl?: string;
   duration?: number;
   tags?: string[];
+  lyrics?: string;
 };

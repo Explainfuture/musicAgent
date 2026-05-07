@@ -20,6 +20,7 @@ export function PlayerCard({
   onPause,
   onError,
   onNext,
+  onProgress,
 }: {
   track: PlayableTrack | null;
   status: AgentStatus;
@@ -27,6 +28,7 @@ export function PlayerCard({
   onPause: () => void;
   onError: () => void;
   onNext: () => void;
+  onProgress?: (current: number, duration: number) => void;
 }) {
   const getQQMusicFriendlyNotice = useCallback((rawError: string | null | undefined) => {
     if (!rawError) return "获取播放链接失败，请稍后再试。";
@@ -123,6 +125,10 @@ export function PlayerCard({
     }
   }, [attemptPlay, track, fetchingUrl, effectiveUrl]);
 
+  useEffect(() => {
+    onProgress?.(currentTime, duration);
+  }, [currentTime, duration, onProgress]);
+
   if (!track) return null;
 
   const isPlaying = status === "playing";
@@ -145,7 +151,7 @@ export function PlayerCard({
     <motion.div
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
-      className="flex flex-col items-center"
+      className="glass-panel flex w-full max-w-[360px] flex-col items-center rounded-3xl border border-white/50 bg-white/45 p-6 shadow-lg backdrop-blur-xl"
     >
       {/* Cover art */}
       <div className="relative w-full max-w-[220px] overflow-hidden rounded-2xl shadow-lg aspect-square">
