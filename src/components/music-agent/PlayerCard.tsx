@@ -34,10 +34,50 @@ export function PlayerCard({
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [seeking, setSeeking] = useState(false);
+  const [fetchingUrl, setFetchingUrl] = useState(false);
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
+
+  // For QQ Music tracks, fetch play URL via Electron IPC
+  useEffect(() => {
+    if (!track) return;
+    if (track.source !== "qqmusic") {
+      setResolvedUrl(null);
+      return;
+    }
+    if (track.audioUrl) {
+      setResolvedUrl(null);
+      return;
+    }
+
+    // Need to fetch vkey via Electron IPC
+    if (window.musicAgentShell?.isElectron) {
+      setFetchingUrl(true);
+      const songmid = track.id.replace("qqmusic_", "");
+      window.musicAgentShell.getQQMusicPlayUrl(songmid).then(({ url, error }) => {
+        setFetchingUrl(false);
+        if (url) {
+          setResolvedUrl(url);
+        } else {
+          setNotice(`获取播放链接失败: ${error || "未知错误"}`);
+          onError();
+        }
+      });
+    } else {
+      // In browser dev mode, just use the track's audioUrl if available
+      setNotice("QQ 音乐播放需要 Electron 客户端。");
+    }
+  }, [track, onError]);
+
+  const effectiveUrl = resolvedUrl || track?.audioUrl;
 
   const attemptPlay = useCallback(async () => {
     const a = audioRef.current;
-    if (!a) return;
+    if (!a || !effectiveUrl) return;
+    // Update src if it changed
+    if (a.src !== effectiveUrl) {
+      a.src = effectiveUrl;
+      a.load();
+    }
     try {
       a.muted = false;
       a.volume = 1;
@@ -54,15 +94,17 @@ export function PlayerCard({
         onError();
       }
     }
-  }, [onError, onPlay]);
+  }, [onError, onPlay, effectiveUrl]);
 
   useEffect(() => {
     setNotice("");
     setNeedsManual(false);
     setCurrentTime(0);
     setDuration(0);
-    void attemptPlay();
-  }, [attemptPlay, track]);
+    if (!fetchingUrl && effectiveUrl) {
+      void attemptPlay();
+    }
+  }, [attemptPlay, track, fetchingUrl, effectiveUrl]);
 
   if (!track) return null;
 
@@ -140,15 +182,20 @@ export function PlayerCard({
         </div>
       </div>
 
+      {/* Loading indicator */}
+      {fetchingUrl && (
+        <p className="mt-3 text-xs text-muted/60 animate-pulse">正在获取播放链接...</p>
+      )}
+
       {/* Controls */}
       <div className="mt-4 flex items-center gap-4">
         <button
           type="button"
           onClick={toggle}
-          disabled={buffering}
+          disabled={buffering || fetchingUrl}
           className="grid h-11 w-11 place-items-center rounded-full bg-foreground text-white shadow-md transition-all hover:scale-105 active:scale-95 disabled:opacity-40"
         >
-          {buffering ? (
+          {(buffering || fetchingUrl) ? (
             <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white" />
           ) : isPlaying ? (
             <Pause size={18} fill="currentColor" />
@@ -173,7 +220,7 @@ export function PlayerCard({
 
       <audio
         ref={audioRef}
-        src={track.audioUrl}
+        src={effectiveUrl || ""}
         autoPlay
         preload="auto"
         className="hidden"

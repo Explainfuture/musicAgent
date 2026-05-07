@@ -12,7 +12,7 @@ import {
 } from "@/lib/ai/prompts";
 import { moodProfileSchema, selectedTrackSchema } from "@/lib/ai/schemas";
 import { rankTracks } from "@/lib/music/normalize";
-import { searchQQMusicTracks, hydrateQQMusicTracks } from "@/lib/music/qqmusic";
+import { searchQQMusicTracks } from "@/lib/music/qqmusic";
 import type {
   AgentResolveRequest,
   AgentResolveResponse,
@@ -255,17 +255,9 @@ export async function POST(request: Request) {
       candidates = rankTracks(rawCandidates, moodProfile, []).slice(0, 10);
     }
 
-    // Step 5: Hydrate play URLs
-    if (candidates.length > 0) {
-      const result = await hydrateQQMusicTracks(candidates);
-      diagnostics.push(...result.diagnostics.map((d) => `vkey: ${d}`));
-      if (result.tracks.length > 0) {
-        candidates = result.tracks;
-      } else {
-        diagnostics.push("All QQ Music tracks had empty play URLs (no vkey).");
-        candidates = [];
-      }
-    }
+    // Note: QQ Music tracks don't have audioUrl yet.
+    // The Electron renderer fetches play URLs via IPC (Chromium net.fetch),
+    // which bypasses QQ Music's API signing requirement.
 
     if (candidates.length === 0) {
       return NextResponse.json(

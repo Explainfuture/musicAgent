@@ -1,61 +1,46 @@
 import type { MoodProfile } from "@/types/agent";
 import type { PlayableTrack } from "@/types/music";
-import { getQQMusicCookie } from "./qqmusicAuth";
 
 // ── Types ──────────────────────────────────────────────
 
-type QQMusicSearchSong = {
-  songmid: string;
-  songname: string;
-  singer: Array<{ name: string }>;
-  albummid: string;
-  albumname: string;
+type ClientSearchSong = {
+  mid: string;
+  id: number;
+  name: string;
+  title: string;
+  singer: Array<{ mid: string; name: string; title: string }>;
+  album: { mid: string; name: string; title: string };
   interval: number;
-  strMediaMid?: string;
 };
 
-type QQMusicVkeyInfo = {
-  songmid: string;
-  purl: string;
-  filename: string;
-};
-
-type QQMusicVkeyBody = {
+type ClientSearchResponse = {
   code: number;
   data: {
-    midurlinfo: QQMusicVkeyInfo[];
-    sip: string[];
+    song: {
+      list: ClientSearchSong[];
+      curnum: number;
+      curpage: number;
+      totalnum: number;
+    };
   };
 };
 
 // ── Config ─────────────────────────────────────────────
 
-const QQ_MUSIC_API = "https://u.y.qq.com/cgi-bin/musicu.fcg";
+const SEARCH_API = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp";
 const COVER_TEMPLATE = "https://y.qq.com/music/photo_new/T002R300x300M000{albummid}.jpg";
 
 const USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-// Persistent guid (changes per process, not per call)
-const GLOBAL_GUID = String(Math.floor(Math.random() * 10000000000));
-
-// ── Cookie helpers ─────────────────────────────────────
-
-function parseUin(cookie: string): string {
-  const uinMatch = cookie.match(/(?:^|;\s*)uin=([^;]+)/);
-  return uinMatch ? uinMatch[1].replace(/\D/g, "") : "0";
-}
-
-function getCookie(): string {
-  return getQQMusicCookie();
-}
+import { getQQMusicCookie } from "./qqmusicAuth";
 
 // ── Search ──────────────────────────────────────────────
 
 function buildSearchQuery(moodProfile: MoodProfile): string {
   const keywords = moodProfile.keywords.join(" ");
   const genre = moodProfile.searchGenre || "";
-  return `${genre} ${keywords}`.replace(/\s+/g, " ").trim().slice(0, 60) || "轻音乐 安静";
+  return `${genre} ${keywords}`.replace(/\s+/g, " ").trim().slice(0, 50) || "安静 轻音乐";
 }
 
 export async function searchQQMusicTracks(
@@ -63,168 +48,53 @@ export async function searchQQMusicTracks(
   limit = 15,
 ): Promise<PlayableTrack[]> {
   const query = buildSearchQuery(moodProfile);
+  const cookie = getQQMusicCookie();
 
-  const body = {
-    music: {
-      search: {
-        SearchCgiService: {
-          method: "DoSearchForQQMusicDesktop",
-          module: "music.search.SearchCgiService",
-          param: {
-            num_per_page: Math.min(limit, 40),
-            page_num: 1,
-            query,
-            search_type: 0,
-          },
-        },
-      },
-    },
-  };
+  const params = new URLSearchParams({
+    p: "1",
+    n: String(Math.min(limit, 30)),
+    w: query,
+    format: "json",
+    new_json: "1",
+  });
 
-  const cookie = getCookie();
+  const url = `${SEARCH_API}?${params}`;
 
-  const response = await fetch(QQ_MUSIC_API, {
-    method: "POST",
+  const response = await fetch(url, {
     headers: {
-      "Content-Type": "application/json",
       "User-Agent": USER_AGENT,
       Referer: "https://y.qq.com",
-      Origin: "https://y.qq.com",
       ...(cookie ? { Cookie: cookie } : {}),
     },
-    body: JSON.stringify(body),
   });
 
   if (!response.ok) {
-    throw new Error(`QQ Music search failed: ${response.status}`);
+    throw new Error(`QQ Music search failed: HTTP ${response.status}`);
   }
 
-  const result = (await response.json()) as Record<string, unknown>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const searchResult = (result as any)?.music?.search?.SearchCgiService
-    ?.DoSearchForQQMusicDesktop as
-    | { code: number; data: { body: { song: { list: QQMusicSearchSong[] } } } }
-    | undefined;
+  const data = (await response.json()) as ClientSearchResponse;
 
-  if (searchResult?.code !== 0 || !searchResult?.data?.body?.song?.list?.length) {
-    throw new Error(`QQ Music search returned no results for: ${query.slice(0, 60)}`);
+  if (data.code !== 0 || !data.data?.song?.list?.length) {
+    throw new Error(`QQ Music: no results for "${query}"`);
   }
 
-  return searchResult.data.body.song.list.map((song) => ({
-    id: `qqmusic_${song.songmid}`,
+  return data.data.song.list.map((song) => ({
+    id: `qqmusic_${song.mid}`,
     source: "qqmusic" as const,
-    title: song.songname,
-    artist: song.singer?.map((s) => s.name).join("/") || undefined,
-    coverUrl: COVER_TEMPLATE.replace("{albummid}", song.albummid),
+    title: song.name || song.title,
+    artist: song.singer?.map((s) => s.name || s.title).join("/") || undefined,
+    coverUrl: COVER_TEMPLATE.replace("{albummid}", song.album?.mid || ""),
     duration: song.interval,
-    tags: [song.albumname, ...moodProfile.keywords.slice(0, 3), moodProfile.scene].filter(Boolean),
+    tags: [
+      song.album?.name || "",
+      song.album?.title || "",
+      ...moodProfile.keywords.slice(0, 2),
+    ].filter(Boolean),
+    // audioUrl is NOT set here — it will be fetched client-side via Electron IPC
   }));
-}
 
-// ── Play URL (vkey) ─────────────────────────────────────
-
-export async function getQQMusicPlayUrl(
-  songmid: string,
-): Promise<{ url: string | null; diagnostic: string }> {
-  const cookie = getCookie();
-  const uin = cookie ? parseUin(cookie) : "0";
-
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
-
-    const response = await fetch(QQ_MUSIC_API, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": USER_AGENT,
-        Referer: "https://y.qq.com",
-        Origin: "https://y.qq.com",
-        ...(cookie ? { Cookie: cookie } : {}),
-      },
-      body: JSON.stringify({
-        comm: {
-          uin: Number(uin) || 0,
-          format: "json",
-          ct: 24,
-          cv: 0,
-        },
-        req_0: {
-          module: "vkey.GetVkeyServer",
-          method: "CgiGetVkey",
-          param: {
-            guid: GLOBAL_GUID,
-            songmid: [songmid],
-            songtype: [0],
-            uin: String(uin),
-            loginflag: cookie ? 1 : 0,
-            platform: "20",
-          },
-        },
-      }),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timer);
-
-    if (!response.ok) {
-      return { url: null, diagnostic: `HTTP ${response.status}` };
-    }
-
-    const result = (await response.json()) as Record<string, unknown>;
-    const vkeyData = (result as Record<string, unknown>)?.req_0 as QQMusicVkeyBody | undefined;
-
-    if (!vkeyData || vkeyData.code !== 0) {
-      return { url: null, diagnostic: `vkey code ${vkeyData?.code ?? "null"}` };
-    }
-
-    const info = vkeyData.data.midurlinfo[0];
-    const sip = vkeyData.data.sip[0];
-
-    if (!info?.purl) {
-      return {
-        url: null,
-        diagnostic: `purl empty (${info?.filename?.slice(0, 20) || "no filename"})`,
-      };
-    }
-
-    if (!sip) {
-      return { url: null, diagnostic: "no sip" };
-    }
-
-    const playUrl = info.purl.startsWith("http") ? info.purl : `${sip}${info.purl}`;
-    return { url: playUrl, diagnostic: "ok" };
-  } catch (err) {
-    return { url: null, diagnostic: (err as Error).message };
-  }
-}
-
-// ── Batch hydrate ───────────────────────────────────────
-
-export async function hydrateQQMusicTracks(
-  tracks: PlayableTrack[],
-): Promise<{ tracks: PlayableTrack[]; diagnostics: string[] }> {
-  const toHydrate = tracks.filter((t) => t.source === "qqmusic" && !t.audioUrl).slice(0, 8);
-  const diagnostics: string[] = [];
-
-  if (toHydrate.length === 0) {
-    return { tracks: tracks.filter((t) => t.audioUrl), diagnostics };
-  }
-
-  const results = await Promise.all(
-    toHydrate.map(async (track) => {
-      const songmid = track.id.replace("qqmusic_", "");
-      const { url, diagnostic } = await getQQMusicPlayUrl(songmid);
-      diagnostics.push(`${track.title.slice(0, 20)}: ${diagnostic}`);
-      return { ...track, audioUrl: url || undefined };
-    }),
-  );
-
-  const hydratedMap = new Map(results.map((t) => [t.id, t]));
-
-  const hydrated = tracks
-    .map((t) => hydratedMap.get(t.id) || t)
-    .filter((t) => t.audioUrl);
-
-  return { tracks: hydrated, diagnostics };
+  // Note: audioUrl is intentionally not set.
+  // QQ Music requires a signed vkey request which only works from
+  // Electron's Chromium session (via IPC). The PlayerCard component
+  // handles this by calling window.musicAgentShell.getQQMusicPlayUrl().
 }
