@@ -8,6 +8,7 @@ export type AgentStatus =
   | "searching"
   | "playing"
   | "paused"
+  | "ended"
   | "error";
 
 export type MoodProfile = {
@@ -39,6 +40,57 @@ export type FeedbackRecord = {
   createdAt: string;
 };
 
+export type PlaybackEventType =
+  | "completed"
+  | "skipped"
+  | "play_error"
+  | "manual_feedback";
+
+export type WeightedPreference = {
+  value: string;
+  weight: number;
+  count: number;
+  updatedAt: string;
+};
+
+export type UserMusicProfile = {
+  version: 1;
+  preferredGenres: WeightedPreference[];
+  preferredScenes: WeightedPreference[];
+  preferredMoods: WeightedPreference[];
+  likedArtists: WeightedPreference[];
+  avoidedArtists: WeightedPreference[];
+  likedTags: WeightedPreference[];
+  avoidedTags: WeightedPreference[];
+  languagePreference?: MoodProfile["searchLanguage"];
+  energyPreference: Record<MoodProfile["energy"], number>;
+  bpmHints: string[];
+  recentEvents: Array<{
+    type: PlaybackEventType;
+    trackId: string;
+    source: PlayableTrack["source"];
+    title: string;
+    artist?: string;
+    mood?: string[];
+    scene?: string;
+    listenedSeconds?: number;
+    durationSeconds?: number;
+    originalText?: string;
+    createdAt: string;
+  }>;
+  updatedAt: string;
+};
+
+export type PlaybackEvent = {
+  type: PlaybackEventType;
+  track: PlayableTrack;
+  moodProfile?: MoodProfile;
+  originalText?: string;
+  listenedSeconds?: number;
+  durationSeconds?: number;
+  createdAt?: string;
+};
+
 export type AgentToolTrace = {
   step: string;
   status: "running" | "success" | "failed";
@@ -49,6 +101,7 @@ export type AgentResolveRequest = {
   text: string;
   previousTrackIds?: string[];
   feedbackMemory?: FeedbackRecord[];
+  userMusicProfile?: UserMusicProfile;
   recentConversation?: Array<{ role: "user" | "agent"; content: string }>;
 };
 

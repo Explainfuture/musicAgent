@@ -12,11 +12,12 @@ const statusGlow: Record<AgentStatus, string> = {
   searching: "rgba(212,149,168,0.22)",
   playing: "rgba(212,149,168,0.30)",
   paused: "rgba(212,149,168,0.10)",
+  ended: "rgba(212,149,168,0.14)",
   error: "rgba(200,120,130,0.18)",
 };
 
 export function AgentOrb({ status }: { status: AgentStatus }) {
-  const isActive = !["idle", "paused", "error"].includes(status);
+  const isActive = !["idle", "paused", "ended", "error"].includes(status);
   const glow = statusGlow[status];
 
   return (

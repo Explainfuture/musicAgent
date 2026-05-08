@@ -13,12 +13,12 @@ import {
 import { moodProfileSchema, selectedTrackSchema } from "@/lib/ai/schemas";
 import { rankTracks } from "@/lib/music/normalize";
 import { fetchQQMusicLyrics, searchQQMusicTracks } from "@/lib/music/qqmusic";
-import { fallbackTracks } from "@/lib/music/fallbackTracks";
 import type {
   AgentResolveRequest,
   AgentResolveResponse,
   AgentToolTrace,
   MoodProfile,
+  UserMusicProfile,
 } from "@/types/agent";
 import type { PlayableTrack } from "@/types/music";
 
@@ -88,6 +88,7 @@ async function selectTrack(input: {
   moodProfile: MoodProfile;
   candidates: PlayableTrack[];
   diagnostics: string[];
+  userMusicProfile?: UserMusicProfile;
 }) {
   try {
     const result = await callDeepSeekJson<unknown>([
@@ -98,6 +99,7 @@ async function selectTrack(input: {
           userText: input.userText,
           moodProfile: input.moodProfile,
           candidates: input.candidates,
+          userMusicProfile: input.userMusicProfile,
         }),
       },
     ]);
@@ -243,7 +245,7 @@ export async function POST(request: Request) {
       try {
         const result = await callDeepSeekJson<unknown>([
           { role: "system", content: agentSystemPrompt },
-          { role: "user", content: buildMoodPrompt(text) },
+          { role: "user", content: buildMoodPrompt(text, body.userMusicProfile) },
         ]);
         moodProfile = moodProfileSchema.parse(result);
         toolTrace.push({ step: "回退结果", status: "success", detail: "JSON 解析成功。" });
@@ -264,10 +266,11 @@ export async function POST(request: Request) {
       rawCandidates,
       moodProfile,
       body.previousTrackIds,
+      body.userMusicProfile,
     ).slice(0, 10);
 
     if (candidates.length === 0 && body.previousTrackIds?.length) {
-      candidates = rankTracks(rawCandidates, moodProfile, []).slice(0, 10);
+      candidates = rankTracks(rawCandidates, moodProfile, [], body.userMusicProfile).slice(0, 10);
     }
 
     // Note: QQ Music tracks don't have audioUrl yet.
@@ -275,14 +278,15 @@ export async function POST(request: Request) {
     // which bypasses QQ Music's API signing requirement.
 
     if (candidates.length === 0) {
-
-      toolTrace.push({ step: "兜底", status: "running", detail: "QQ 音乐暂无可用结果，切换到内置可播曲库。" });
-      candidates = rankTracks(fallbackTracks, moodProfile, body.previousTrackIds).slice(0, 10);
-      if (candidates.length === 0) {
-        candidates = fallbackTracks.slice(0, 3);
-      }
-      toolTrace.push({ step: "兜底结果", status: "success", detail: `fallback 候选数量：${candidates.length}` });
-
+      toolTrace.push({ step: "无可播结果", status: "failed", detail: "QQ 音乐暂无可用候选，且内置 fallback 已关闭。" });
+      return NextResponse.json(
+        {
+          error: "暂时没有找到可播放的歌曲。可以换个描述、换个歌手，或者登录有播放权限的 QQ 音乐账号后再试。",
+          sourceDiagnostics: diagnostics,
+          toolTrace,
+        },
+        { status: 404 },
+      );
     }
 
     // Step 6: AI selects
@@ -292,6 +296,7 @@ export async function POST(request: Request) {
       moodProfile,
       candidates,
       diagnostics,
+      userMusicProfile: body.userMusicProfile,
     });
 
     toolTrace.push({ step: "选歌结果", status: "success", detail: `已选择：${selection.track.title}` });

@@ -1,4 +1,4 @@
-import type { MoodProfile } from "@/types/agent";
+import type { MoodProfile, UserMusicProfile, WeightedPreference } from "@/types/agent";
 import type { PlayableTrack } from "@/types/music";
 
 export const agentSystemPrompt = `你是 MoodPlayer，一个温暖、细腻的音乐陪伴者。你像朋友一样理解情绪，也能精准地挑选音乐。
@@ -88,10 +88,41 @@ ${history ? `\n最近的对话:\n${history}\n` : ""}
 
 // ── Mood parsing prompt ────────────────────────────────
 
-export function buildMoodPrompt(userText: string) {
+function topProfileValues(values: WeightedPreference[] | undefined) {
+  if (!values) return [];
+  return values
+    .slice(0, 6)
+    .map((item) => ({ value: item.value, weight: item.weight }));
+}
+
+export function buildUserProfileContext(userMusicProfile?: UserMusicProfile) {
+  if (!userMusicProfile || userMusicProfile.recentEvents.length === 0) {
+    return "用户长期音乐画像：暂无稳定记录。";
+  }
+
+  return `用户长期音乐画像 JSON：
+${JSON.stringify({
+  preferredGenres: topProfileValues(userMusicProfile.preferredGenres),
+  preferredScenes: topProfileValues(userMusicProfile.preferredScenes),
+  preferredMoods: topProfileValues(userMusicProfile.preferredMoods),
+  likedArtists: topProfileValues(userMusicProfile.likedArtists),
+  avoidedArtists: topProfileValues(userMusicProfile.avoidedArtists),
+  likedTags: topProfileValues(userMusicProfile.likedTags),
+  avoidedTags: topProfileValues(userMusicProfile.avoidedTags),
+  languagePreference: userMusicProfile.languagePreference,
+  energyPreference: userMusicProfile.energyPreference,
+  bpmHints: userMusicProfile.bpmHints.slice(0, 5),
+  recentEvents: userMusicProfile.recentEvents.slice(0, 8),
+})}`;
+}
+
+export function buildMoodPrompt(userText: string, userMusicProfile?: UserMusicProfile) {
   return `分析用户的音乐需求。
 
 用户说："${userText}"
+${buildUserProfileContext(userMusicProfile)}
+
+请参考长期画像，但当前这句话的明确需求优先。
 
 返回 JSON：
 {
@@ -114,6 +145,7 @@ export function buildSelectionPrompt(input: {
   userText: string;
   moodProfile: MoodProfile;
   candidates: PlayableTrack[];
+  userMusicProfile?: UserMusicProfile;
 }) {
   const genre = input.moodProfile.searchGenre || "";
   const bpm = input.moodProfile.bpmHint || "";
@@ -126,6 +158,7 @@ export function buildSelectionPrompt(input: {
 风格: ${genre || "不限"}
 ${bpm ? `BPM: ${bpm}` : ""}
 避开: ${input.moodProfile.avoid.join("、")}
+${buildUserProfileContext(input.userMusicProfile)}
 
 候选 (${input.candidates.length} 首):
 ${JSON.stringify(
@@ -143,6 +176,7 @@ ${JSON.stringify(
 2. 优先中文歌曲 (qqmusic 来源)
 3. 优先有明确风格标签的
 4. 避开用户不要的
+5. 如果长期画像和当前需求冲突，当前需求优先；否则优先贴近长期偏好，避开最近跳过或明确负反馈的方向
 
 返回 JSON:
 {

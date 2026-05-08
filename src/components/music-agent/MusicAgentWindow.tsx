@@ -9,6 +9,7 @@ import { PlayerCard } from "./PlayerCard";
 import { StatusIndicator } from "./StatusIndicator";
 import { Button } from "@/components/ui/button";
 import { readFeedbackMemory, saveFeedbackRecord } from "@/lib/storage/feedbackMemory";
+import { readUserMusicProfile, updateUserMusicProfile } from "@/lib/storage/userMusicProfile";
 import { useSpeechRecognition } from "@/lib/speech/useSpeechRecognition";
 import { cn } from "@/lib/utils";
 import type { AgentResolveResponse, AgentStatus, AgentToolTrace } from "@/types/agent";
@@ -40,9 +41,11 @@ export function MusicAgentWindow() {
   const [playHistory, setPlayHistory] = useState<PlayableTrack[]>([]);
   const [toolTraceExpanded, setToolTraceExpanded] = useState(false);
   const traceTimerRef = useRef<number | null>(null);
+  const autoRetryCountRef = useRef(0);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const track = response?.track ?? null;
+  const moodProfile = response?.moodProfile;
 
   const lyricLines = useMemo(
     () => (track?.lyrics ? track.lyrics.split("\n").map((line) => line.trim()).filter(Boolean) : []),
@@ -53,6 +56,18 @@ export function MusicAgentWindow() {
     const ratio = playbackDuration > 0 ? Math.min(playbackTime / playbackDuration, 0.999) : 0;
     return Math.floor(ratio * lyricLines.length);
   }, [lyricLines.length, playbackDuration, playbackTime]);
+  const displayedToolTrace = useMemo(() => {
+    if (status === "thinking" || status === "searching") return toolTrace;
+    return toolTrace.map((item) =>
+      item.status === "running" ? { ...item, status: "success" as const } : item,
+    );
+  }, [status, toolTrace]);
+  const activeToolDetail = useMemo(() => {
+    if (status === "thinking" || status === "searching") {
+      return displayedToolTrace.find((item) => item.status === "running")?.detail;
+    }
+    return displayedToolTrace.at(-1)?.detail;
+  }, [displayedToolTrace, status]);
 
 
   // QQ Music auth check
@@ -152,6 +167,7 @@ export function MusicAgentWindow() {
             text: trimmed,
             previousTrackIds: allPrevIds,
             feedbackMemory: readFeedbackMemory(),
+            userMusicProfile: readUserMusicProfile(),
             recentConversation: recentConv,
           }),
         });
@@ -186,7 +202,6 @@ export function MusicAgentWindow() {
             ...p,
             { role: "agent", content: `我为你选了《${data.track!.title}》${data.track!.artist ? ` — ${data.track!.artist}` : ""}，听听看。` },
           ]);
-          setStatus("playing");
         }
       } catch (err) {
         setStatus("error");
@@ -212,6 +227,7 @@ export function MusicAgentWindow() {
   const handleSubmit = () => {
     const t = inputText.trim();
     if (!t) return;
+    autoRetryCountRef.current = 0;
     setMessages((p) => [...p, { role: "user", content: t }]);
     setInputText("");
     void resolveTrack(t);
@@ -219,22 +235,70 @@ export function MusicAgentWindow() {
 
   const handleNext = useCallback(() => {
     if (!track || !lastSubmitted) return;
+    autoRetryCountRef.current = 0;
     saveFeedbackRecord({ track, feedback: "skipped", originalText: lastSubmitted });
+    updateUserMusicProfile({
+      type: "skipped",
+      track,
+      moodProfile,
+      originalText: lastSubmitted,
+      listenedSeconds: playbackTime,
+      durationSeconds: playbackDuration,
+    });
     setMessages((p) => [
       ...p,
       { role: "user", content: "这首不太对，换一首吧。" },
       { role: "agent", content: "好的，我换个方向为你找。" },
     ]);
     void resolveTrack(lastSubmitted, [track.id]);
-  }, [lastSubmitted, resolveTrack, track]);
+  }, [lastSubmitted, moodProfile, playbackDuration, playbackTime, resolveTrack, track]);
 
-  const handlePlay = useCallback(() => setStatus("playing"), []);
-  const handlePause = useCallback(() => setStatus("paused"), []);
-  const handlePlayerError = useCallback(() => {
-    setStatus("error");
-    setNotice("播放出错了，请点击下一首或重新描述感受。",
-    );
+  const handleEnded = useCallback(() => {
+    if (!track || !lastSubmitted) return;
+    updateUserMusicProfile({
+      type: "completed",
+      track,
+      moodProfile,
+      originalText: lastSubmitted,
+      listenedSeconds: playbackDuration || playbackTime,
+      durationSeconds: playbackDuration,
+    });
+    setStatus("ended");
+    setMessages((p) => [
+      ...p,
+      { role: "agent", content: "这首听完了，我再接着找一首。" },
+    ]);
+    void resolveTrack(lastSubmitted, [track.id]);
+  }, [lastSubmitted, moodProfile, playbackDuration, playbackTime, resolveTrack, track]);
+
+  const handlePlay = useCallback(() => {
+    autoRetryCountRef.current = 0;
+    setStatus("playing");
   }, []);
+  const handlePause = useCallback(() => setStatus("paused"), []);
+  const handlePlayerError = useCallback((reason?: string) => {
+    if (track) {
+      updateUserMusicProfile({
+        type: "play_error",
+        track,
+        moodProfile,
+        originalText: lastSubmitted,
+        listenedSeconds: playbackTime,
+        durationSeconds: playbackDuration,
+      });
+    }
+    if (track && lastSubmitted && autoRetryCountRef.current < 3) {
+      autoRetryCountRef.current += 1;
+      setMessages((p) => [
+        ...p,
+        { role: "agent", content: "这首歌没有拿到可播放链接，我换一首能播的。" },
+      ]);
+      void resolveTrack(lastSubmitted, [track.id]);
+      return;
+    }
+    setStatus("error");
+    setNotice(reason || "播放出错了，请点击下一首或重新描述感受。");
+  }, [lastSubmitted, moodProfile, playbackDuration, playbackTime, track]);
 
   const canSubmit = useMemo(
     () => inputText.trim().length > 0 && !["thinking", "searching"].includes(status),
@@ -294,7 +358,7 @@ export function MusicAgentWindow() {
             </button>
           )}
 
-          <StatusIndicator status={status} detail={toolTrace.find((t) => t.status === "running")?.detail} />
+          <StatusIndicator status={status} detail={activeToolDetail} />
         </div>
 
         <div className="min-h-0 flex-1 px-3 pb-3">
@@ -349,6 +413,7 @@ export function MusicAgentWindow() {
                 onPause={handlePause}
                 onError={handlePlayerError}
                 onNext={handleNext}
+                onEnded={handleEnded}
                 onProgress={(current, duration) => {
                   setPlaybackTime(current);
                   setPlaybackDuration(duration);
@@ -443,7 +508,7 @@ export function MusicAgentWindow() {
               active={status === "playing" || status === "paused"}
             />
 
-            {toolTrace.length > 0 && (
+            {displayedToolTrace.length > 0 && (
               <div className="rounded-xl border border-border/40 bg-surface/55 p-2">
                 <button
                   type="button"
@@ -456,12 +521,12 @@ export function MusicAgentWindow() {
 
                 <div className="mt-1 rounded-lg bg-white/50 px-2 py-1.5 text-xs text-foreground/70">
                   <span className="mr-1">⏳</span>
-                  {toolTrace.find((t) => t.status === "running")?.detail || toolTrace.at(-1)?.detail}
+                  {activeToolDetail}
                 </div>
 
                 {toolTraceExpanded && (
                   <div className="mt-2 max-h-[280px] space-y-1 overflow-y-auto pr-1">
-                    {toolTrace.map((t, idx) => (
+                    {displayedToolTrace.map((t, idx) => (
                       <div key={`${t.step}-${idx}`} className="rounded-lg bg-surface/70 px-2.5 py-1.5 text-xs text-foreground/70">
                         <span className="mr-1">{t.status === "running" ? "⏳" : t.status === "success" ? "✅" : "⚠️"}</span>
                         <span className="font-medium">{t.step}:</span> {t.detail}

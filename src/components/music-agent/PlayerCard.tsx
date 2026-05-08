@@ -13,6 +13,17 @@ function formatTime(seconds: number) {
   return `${m}:${s}`;
 }
 
+function describeMediaError(code?: number) {
+  if (code === 2) return "网络连接中断";
+  if (code === 3) return "音频解码失败";
+  if (code === 4) return "音频地址不可用";
+  return "媒体加载失败";
+}
+
+function getAudioErrorMessage(audio: HTMLAudioElement) {
+  return `播放失败：${describeMediaError(audio.error?.code)}`;
+}
+
 export function PlayerCard({
   track,
   status,
@@ -20,14 +31,16 @@ export function PlayerCard({
   onPause,
   onError,
   onNext,
+  onEnded,
   onProgress,
 }: {
   track: PlayableTrack | null;
   status: AgentStatus;
   onPlay: () => void;
   onPause: () => void;
-  onError: () => void;
+  onError: (reason?: string) => void;
   onNext: () => void;
+  onEnded: () => void;
   onProgress?: (current: number, duration: number) => void;
 }) {
   const getQQMusicFriendlyNotice = useCallback((rawError: string | null | undefined) => {
@@ -55,30 +68,37 @@ export function PlayerCard({
   const [seeking, setSeeking] = useState(false);
   const [fetchingUrl, setFetchingUrl] = useState(false);
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(null);
+  const requestedQQTrackRef = useRef<string | null>(null);
 
   // For QQ Music tracks, fetch play URL via Electron IPC
   useEffect(() => {
     if (!track) return;
     if (track.source !== "qqmusic") {
+      requestedQQTrackRef.current = null;
       setResolvedUrl(null);
       return;
     }
     if (track.audioUrl) {
+      requestedQQTrackRef.current = null;
       setResolvedUrl(null);
       return;
     }
+    if (requestedQQTrackRef.current === track.id) return;
+    requestedQQTrackRef.current = track.id;
 
     // Need to fetch vkey via Electron IPC
     if (window.musicAgentShell?.isElectron) {
       setFetchingUrl(true);
+      const requestedTrackId = track.id;
       const songmid = track.id.replace("qqmusic_", "");
       window.musicAgentShell.getQQMusicPlayUrl(songmid).then(({ url, error }) => {
+        if (requestedQQTrackRef.current !== requestedTrackId) return;
         setFetchingUrl(false);
         if (url) {
           setResolvedUrl(url);
         } else {
           setNotice(getQQMusicFriendlyNotice(error));
-          onError();
+          onError(error || "purl empty");
         }
       });
     } else {
@@ -110,7 +130,7 @@ export function PlayerCard({
         setNotice("点击播放按钮即可出声");
       } else {
         setNotice("播放失败，让我换一首");
-        onError();
+        onError("audio play failed");
       }
     }
   }, [onError, onPlay, effectiveUrl]);
@@ -252,9 +272,15 @@ export function PlayerCard({
           onLoadedMetadata={(e) => setDuration(e.currentTarget.duration || 0)}
           onTimeUpdate={(e) => { if (!seeking) setCurrentTime(e.currentTarget.currentTime || 0); }}
           onPlay={onPlay}
-          onPause={onPause}
-          onEnded={onNext}
-          onError={() => { setNotice("播放失败，让我换一首"); onError(); }}
+          onPause={(e) => {
+            if (!e.currentTarget.ended && !e.currentTarget.error) onPause();
+          }}
+          onEnded={onEnded}
+          onError={(e) => {
+            const message = getAudioErrorMessage(e.currentTarget);
+            setNotice(message);
+            onError(message);
+          }}
         />
       )}
     </motion.div>

@@ -1,9 +1,10 @@
-const { app, BrowserWindow, session, shell, ipcMain, net } = require("electron");
+const { app, BrowserWindow, session, shell, ipcMain, net, systemPreferences } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs");
 const { loginQQMusic } = require("./qqmusicLogin.cjs");
 
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+app.commandLine.appendSwitch("enable-speech-dispatcher");
 
 const isDev = !app.isPackaged;
 const APP_URL = process.env.ELECTRON_RENDERER_URL || "http://localhost:3000";
@@ -73,6 +74,36 @@ function createWindow() {
 // ── IPC handlers ────────────────────────────────────────
 
 function setupIPC() {
+  ipcMain.handle("microphone:status", async () => {
+    const result = { platform: process.platform, status: "unknown", canOpenSettings: false };
+
+    try {
+      if (process.platform === "darwin" && systemPreferences?.getMediaAccessStatus) {
+        result.status = systemPreferences.getMediaAccessStatus("microphone");
+      }
+      if (process.platform === "win32") {
+        result.status = "windows-system-controlled";
+        result.canOpenSettings = true;
+      }
+    } catch (err) {
+      result.status = err instanceof Error ? err.message : String(err);
+    }
+
+    return result;
+  });
+
+  ipcMain.handle("microphone:open-settings", async () => {
+    if (process.platform === "win32") {
+      await shell.openExternal("ms-settings:privacy-microphone");
+      return { success: true };
+    }
+    if (process.platform === "darwin") {
+      await shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
+      return { success: true };
+    }
+    return { success: false };
+  });
+
   // QQ Music login flow
   ipcMain.handle("qqmusic:login", async () => {
     const win = BrowserWindow.getFocusedWindow();

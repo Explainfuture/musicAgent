@@ -12,6 +12,7 @@ const config: Record<AgentStatus, { label: string; description: string; icon: ty
   searching: { label: "寻找音乐", description: "正在匹配最合适的歌", icon: Radio },
   playing: { label: "正在播放", description: "希望这首歌陪着你", icon: Radio },
   paused: { label: "已暂停", description: "你随时可以继续", icon: PauseCircle },
+  ended: { label: "已听完", description: "我会接着找下一首", icon: Sparkles },
   error: { label: "出了点问题", description: "我会马上重试", icon: AlertTriangle },
 };
 
