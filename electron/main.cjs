@@ -43,10 +43,10 @@ function createWindow() {
   });
 
   const mainWindow = new BrowserWindow({
-    width: 1100,
-    height: 720,
-    minWidth: 1000,
-    minHeight: 620,
+    width: 1280,
+    height: 820,
+    minWidth: 1080,
+    minHeight: 720,
     backgroundColor: "#faf8f7",
     title: "MoodPlayer Agent",
     autoHideMenuBar: true,

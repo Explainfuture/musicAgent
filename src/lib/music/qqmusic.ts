@@ -1,5 +1,5 @@
 import type { MoodProfile } from "@/types/agent";
-import type { PlayableTrack } from "@/types/music";
+import type { PlayableTrack, TimedLyricLine } from "@/types/music";
 
 type ClientSearchSong = {
   mid: string;
@@ -124,18 +124,22 @@ export async function searchQQMusicTracks(moodProfile: MoodProfile, limit = 15):
   const query = buildSearchQuery(moodProfile);
   const cookie = getQQMusicCookie();
 
-  let songs: ClientSearchSong[] = [];
-  try {
-    songs = await searchClassic(query, limit, cookie);
-  } catch {
-    songs = [];
+  const [classicResult, musicuResult] = await Promise.allSettled([
+    searchClassic(query, limit, cookie),
+    searchMusicu(query, limit, cookie),
+  ]);
+
+  const songsByMid = new Map<string, ClientSearchSong>();
+  if (classicResult.status === "fulfilled") {
+    for (const song of classicResult.value) songsByMid.set(song.mid, song);
+  }
+  if (musicuResult.status === "fulfilled") {
+    for (const song of musicuResult.value) {
+      if (!songsByMid.has(song.mid)) songsByMid.set(song.mid, song);
+    }
   }
 
-  if (songs.length === 0) {
-
-    songs = await searchMusicu(query, limit, cookie);
-  }
-
+  const songs = Array.from(songsByMid.values()).slice(0, limit);
   if (!songs.length) {
     throw new Error(`QQ Music: no results for "${query}"`);
   }
@@ -151,7 +155,47 @@ function decodeBase64Utf8(text: string) {
   }
 }
 
-export async function fetchQQMusicLyrics(songmid: string, cookie = ""): Promise<string> {
+function parseLyricTime(raw: string) {
+  const match = raw.match(/^(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?$/);
+  if (!match) return null;
+  const minutes = Number(match[1]);
+  const seconds = Number(match[2]);
+  const fraction = match[3] ? Number(`0.${match[3].padEnd(3, "0").slice(0, 3)}`) : 0;
+  return minutes * 60 + seconds + fraction;
+}
+
+export function parseQQTimedLyrics(raw: string): TimedLyricLine[] {
+  const lines: TimedLyricLine[] = [];
+
+  for (const sourceLine of raw.split("\n")) {
+    const timeMatches = Array.from(sourceLine.matchAll(/\[([0-9:.]+)\]/g));
+    if (timeMatches.length === 0) continue;
+
+    const text = sourceLine.replace(/\[[^\]]*\]/g, "").trim();
+    if (!text) continue;
+
+    for (const match of timeMatches) {
+      const time = parseLyricTime(match[1]);
+      if (time !== null) lines.push({ time, text });
+    }
+  }
+
+  return lines.sort((a, b) => a.time - b.time);
+}
+
+export function stripLyricTags(raw: string) {
+  return raw
+    .replace(/\[[^\]]*\]/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+export async function fetchQQMusicLyricData(songmid: string, cookie = ""): Promise<{
+  lyrics: string;
+  timedLyrics: TimedLyricLine[];
+}> {
   const params = new URLSearchParams({
     songmid,
     format: "json",
@@ -167,13 +211,17 @@ export async function fetchQQMusicLyrics(songmid: string, cookie = ""): Promise<
     },
   });
 
-  if (!response.ok) return "";
+  if (!response.ok) return { lyrics: "", timedLyrics: [] };
   const data = (await response.json()) as { lyric?: string };
   const raw = decodeBase64Utf8(data.lyric || "");
-  return raw
-    .replace(/\[[^\]]*\]/g, "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .join("\n");
+
+  return {
+    lyrics: stripLyricTags(raw),
+    timedLyrics: parseQQTimedLyrics(raw),
+  };
+}
+
+export async function fetchQQMusicLyrics(songmid: string, cookie = ""): Promise<string> {
+  const lyricData = await fetchQQMusicLyricData(songmid, cookie);
+  return lyricData.lyrics;
 }

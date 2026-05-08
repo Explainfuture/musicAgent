@@ -97,6 +97,11 @@ export type AgentToolTrace = {
   detail: string;
 };
 
+export type AgentResolveStreamEvent =
+  | { type: "trace"; trace: AgentToolTrace }
+  | { type: "result"; data: AgentResolveResponse }
+  | { type: "error"; error: string };
+
 export type AgentResolveRequest = {
   text: string;
   previousTrackIds?: string[];

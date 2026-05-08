@@ -25,14 +25,14 @@ export function StatusIndicator({ status, detail }: { status: AgentStatus; detai
       key={status}
       initial={{ opacity: 0.6, y: 4 }}
       animate={{ opacity: 1, y: 0 }}
-      className="flex items-center gap-2 rounded-xl border border-border/40 bg-surface/60 px-3 py-2"
+      className="flex items-center gap-2 rounded-2xl border border-white/70 bg-white/60 px-3 py-2 shadow-xs"
     >
       <motion.div
         animate={spinning ? { rotate: 360 } : { rotate: 0 }}
         transition={spinning ? { duration: 1.4, repeat: Infinity, ease: "linear" } : { duration: 0.2 }}
         className="rounded-full bg-rose-surface p-1.5 text-rose"
       >
-        <Icon size={14} />
+        <Icon size={14} aria-hidden="true" />
       </motion.div>
       <div className="min-w-0">
         <p className="text-xs font-semibold text-foreground/85">{label}</p>

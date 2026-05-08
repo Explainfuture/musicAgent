@@ -1,5 +1,10 @@
 export type MusicSource = "jamendo" | "audius" | "qqmusic" | "direct";
 
+export type TimedLyricLine = {
+  time: number;
+  text: string;
+};
+
 export type PlayableTrack = {
   id: string;
   source: MusicSource;
@@ -10,4 +15,5 @@ export type PlayableTrack = {
   duration?: number;
   tags?: string[];
   lyrics?: string;
+  timedLyrics?: TimedLyricLine[];
 };
