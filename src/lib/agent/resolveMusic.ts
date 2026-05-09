@@ -8,7 +8,7 @@ import {
   buildSelectionPrompt,
   musicAgentTools,
 } from "@/lib/ai/prompts";
-import { moodProfileSchema, selectedTrackSchema } from "@/lib/ai/schemas";
+import { moodProfileSchema, selectedTracksSchema } from "@/lib/ai/schemas";
 import { rankTracks } from "@/lib/music/normalize";
 import { searchQQMusicTracks } from "@/lib/music/qqmusic";
 import type {
@@ -16,6 +16,7 @@ import type {
   AgentResolveResponse,
   AgentToolTrace,
   MoodProfile,
+  TrackRecommendation,
 } from "@/types/agent";
 
 type TraceEmitter = (trace: AgentToolTrace) => void;
@@ -155,7 +156,7 @@ async function searchCandidates(moodProfile: MoodProfile, diagnostics: string[],
   }
 }
 
-async function selectTrack(input: {
+async function selectTracks(input: {
   userText: string;
   moodProfile: MoodProfile;
   candidates: ReturnType<typeof rankTracks>;
@@ -179,30 +180,39 @@ async function selectTrack(input: {
       },
     ]);
 
-    const selection = selectedTrackSchema.parse(result);
-    const track =
-      input.candidates.find((candidate) => candidate.id === selection.selectedTrackId) ||
-      input.candidates[0];
+    const selection = selectedTracksSchema.parse(result);
+    const tracksById = new Map(input.candidates.map((candidate) => [candidate.id, candidate]));
+    const usedIds = new Set<string>();
+    const recommendations: TrackRecommendation[] = selection.recommendations.flatMap((item) => {
+      const track = tracksById.get(item.selectedTrackId);
+      if (!track || usedIds.has(track.id)) return [];
+      usedIds.add(track.id);
+      return [{
+        track,
+        reason: item.reason,
+        explanationSegments: item.explanationSegments,
+      }];
+    });
 
-    input.addTrace({ step: "选歌", status: "success", detail: `已选择：${track.title}` });
+    if (recommendations.length === 0) {
+      throw new Error("LLM selection did not match any candidate track.");
+    }
 
-    return {
-      track,
-      explanationSegments: selection.explanationSegments,
-    };
+    input.addTrace({ step: "选歌", status: "success", detail: `已缓存 ${recommendations.length} 首候选：${recommendations[0].track.title}` });
+
+    return recommendations;
   } catch (error) {
     input.diagnostics.push(`LLM selection fallback: ${(error as Error).message}`);
-    const track = input.candidates[0];
-    input.addTrace({ step: "选歌", status: "failed", detail: "模型选歌失败，使用排序第一首兜底。" });
+    input.addTrace({ step: "选歌", status: "failed", detail: "模型选歌失败，使用排序前三首兜底。" });
 
-    return {
+    return input.candidates.slice(0, 3).map((track) => ({
       track,
       explanationSegments: buildFallbackExplanation({
         userText: input.userText,
         moodProfile: input.moodProfile,
         track,
       }),
-    };
+    }));
   }
 }
 
@@ -271,7 +281,7 @@ export async function resolveMusicAgent(
   }
 
   addTrace({ step: "排序", status: "success", detail: `已筛出 ${candidates.length} 首候选。` });
-  const selection = await selectTrack({
+  const recommendations = await selectTracks({
     userText: text,
     moodProfile,
     candidates,
@@ -280,12 +290,14 @@ export async function resolveMusicAgent(
     addTrace,
   });
   addTrace({ step: "歌词", status: "running", detail: "歌曲已返回，歌词将异步加载。" });
+  const firstRecommendation = recommendations[0];
 
   return {
     intent: "music",
     moodProfile,
-    track: selection.track,
-    explanationSegments: selection.explanationSegments,
+    track: firstRecommendation.track,
+    explanationSegments: firstRecommendation.explanationSegments,
+    recommendations,
     sourceDiagnostics: diagnostics,
     toolTrace,
   };

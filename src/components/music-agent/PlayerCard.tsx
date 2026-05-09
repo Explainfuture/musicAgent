@@ -2,7 +2,7 @@
 
 import { ChangeEvent, PointerEvent, useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Play, Pause, SkipForward, Music } from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward, Music } from "lucide-react";
 import type { AgentStatus } from "@/types/agent";
 import type { PlayableTrack } from "@/types/music";
 
@@ -38,9 +38,11 @@ export function PlayerCard({
   onPlay,
   onPause,
   onError,
+  onPrevious,
   onNext,
   onEnded,
   onProgress,
+  hasPrevious,
   voiceCaptureActive,
 }: {
   track: PlayableTrack | null;
@@ -48,9 +50,11 @@ export function PlayerCard({
   onPlay: () => void;
   onPause: () => void;
   onError: (reason?: string) => void;
+  onPrevious: () => void;
   onNext: () => void;
   onEnded: () => void;
   onProgress?: (current: number, duration: number) => void;
+  hasPrevious: boolean;
   voiceCaptureActive: boolean;
 }) {
   const getQQMusicFriendlyNotice = useCallback((rawError: string | null | undefined) => {
@@ -187,10 +191,13 @@ export function PlayerCard({
     setCurrentTime(0);
     setDuration(track?.duration ?? 0);
     onProgress?.(0, track?.duration ?? 0);
-    if (!fetchingUrl && effectiveUrl && !voiceCaptureActive) {
+  }, [track?.id, track?.duration, onProgress]);
+
+  useEffect(() => {
+    if (!fetchingUrl && effectiveUrl && !voiceCaptureActive && status !== "paused") {
       void attemptPlay();
     }
-  }, [track?.id, track?.duration, fetchingUrl, effectiveUrl, voiceCaptureActive]);
+  }, [attemptPlay, effectiveUrl, fetchingUrl, status, voiceCaptureActive]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -240,7 +247,11 @@ export function PlayerCard({
   };
 
   const toggle = () => {
-    if (!audioRef.current) return;
+    if (!effectiveUrl || !audioRef.current) {
+      if (isPlaying) onPause();
+      else onPlay();
+      return;
+    }
     if (audioRef.current.paused) void attemptPlay();
     else { audioRef.current.pause(); onPause(); }
   };
@@ -329,15 +340,24 @@ export function PlayerCard({
         </p>
       )}
 
-      <div className="mt-5 flex items-center gap-4">
+      <div className="mt-5 flex items-center justify-center gap-4">
+        <button
+          type="button"
+          onClick={onPrevious}
+          disabled={!hasPrevious || voiceCaptureActive}
+          aria-label="上一首"
+          className="grid h-11 w-11 place-items-center rounded-full text-muted/55 transition-colors hover:bg-rose-surface/70 hover:text-rose/70 disabled:opacity-35 focus-visible:ring-2 focus-visible:ring-rose/30 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
+        >
+          <SkipBack size={20} aria-hidden="true" />
+        </button>
         <button
           type="button"
           onClick={toggle}
-          disabled={buffering || fetchingUrl || voiceCaptureActive}
+          disabled={buffering || voiceCaptureActive}
           aria-label={isPlaying ? "暂停" : "播放"}
           className="grid h-14 w-14 place-items-center rounded-full bg-foreground text-white shadow-md transition-transform hover:scale-105 active:scale-95 disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-rose/35 focus-visible:ring-offset-2 focus-visible:ring-offset-white"
         >
-          {(buffering || fetchingUrl) ? (
+          {buffering ? (
             <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-white" />
           ) : isPlaying ? (
             <Pause size={20} fill="currentColor" aria-hidden="true" />

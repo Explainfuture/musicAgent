@@ -150,7 +150,7 @@ export function buildSelectionPrompt(input: {
   const genre = input.moodProfile.searchGenre || "";
   const bpm = input.moodProfile.bpmHint || "";
 
-  return `从候选歌曲中选一首最适合用户当前状态的。
+  return `从候选歌曲中选出最多三首最适合用户当前状态的，并按适合程度从高到低排序。
 
 用户说: "${input.userText}"
 情绪: ${input.moodProfile.mood.join("、")}
@@ -177,12 +177,17 @@ ${JSON.stringify(
 3. 优先有明确风格标签的
 4. 避开用户不要的
 5. 如果长期画像和当前需求冲突，当前需求优先；否则优先贴近长期偏好，避开最近跳过或明确负反馈的方向
+6. 每首都要写独立推荐理由，方便用户点下一首时直接展示
 
 返回 JSON:
 {
-  "selectedTrackId": "id",
-  "reason": "理由",
-  "explanationSegments": ["段1: 回应情绪", "段2: 歌曲特点", "段3: 温柔收尾"]
+  "recommendations": [
+    {
+      "selectedTrackId": "id",
+      "reason": "理由",
+      "explanationSegments": ["段1: 回应情绪", "段2: 歌曲特点", "段3: 温柔收尾"]
+    }
+  ]
 }`;
 }
 

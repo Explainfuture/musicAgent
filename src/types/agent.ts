@@ -116,8 +116,15 @@ export type AgentResolveResponse = {
   moodProfile?: MoodProfile;
   track?: PlayableTrack;
   explanationSegments?: string[];
+  recommendations?: TrackRecommendation[];
   // Chat mode
   chatReply?: string;
   sourceDiagnostics?: string[];
   toolTrace?: AgentToolTrace[];
+};
+
+export type TrackRecommendation = {
+  track: PlayableTrack;
+  reason?: string;
+  explanationSegments: string[];
 };

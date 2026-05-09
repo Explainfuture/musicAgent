@@ -30,9 +30,18 @@ export const selectedTrackSchema = z.object({
   explanationSegments: z.array(z.string()).min(2).max(5),
 });
 
+export const selectedTracksSchema = z.object({
+  recommendations: z.array(selectedTrackSchema).min(1).max(3),
+});
+
 export const agentResolveResponseSchema = z.object({
   moodProfile: moodProfileSchema,
   track: playableTrackSchema,
   explanationSegments: z.array(z.string()).min(2),
+  recommendations: z.array(z.object({
+    track: playableTrackSchema,
+    reason: z.string().optional(),
+    explanationSegments: z.array(z.string()).min(2),
+  })).optional(),
   sourceDiagnostics: z.array(z.string()).optional(),
 });

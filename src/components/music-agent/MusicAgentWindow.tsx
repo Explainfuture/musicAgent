@@ -12,7 +12,13 @@ import { readFeedbackMemory, saveFeedbackRecord } from "@/lib/storage/feedbackMe
 import { readUserMusicProfile, updateUserMusicProfile } from "@/lib/storage/userMusicProfile";
 import { useSpeechRecognition } from "@/lib/speech/useSpeechRecognition";
 import { cn } from "@/lib/utils";
-import type { AgentResolveResponse, AgentResolveStreamEvent, AgentStatus, AgentToolTrace } from "@/types/agent";
+import type {
+  AgentResolveResponse,
+  AgentResolveStreamEvent,
+  AgentStatus,
+  AgentToolTrace,
+  TrackRecommendation,
+} from "@/types/agent";
 import type { PlayableTrack, TimedLyricLine } from "@/types/music";
 import {
   AudioLines,
@@ -45,6 +51,23 @@ type LyricDisplayLine = {
   time?: number;
 };
 
+function getRecommendations(data: AgentResolveResponse): TrackRecommendation[] {
+  if (data.recommendations?.length) return data.recommendations;
+  if (!data.track) return [];
+  return [{
+    track: data.track,
+    explanationSegments: data.explanationSegments ?? [],
+  }];
+}
+
+function getCurrentRecommendation(data: AgentResolveResponse | null): TrackRecommendation | null {
+  if (!data?.track) return null;
+  return data.recommendations?.find((item) => item.track.id === data.track?.id) ?? {
+    track: data.track,
+    explanationSegments: data.explanationSegments ?? [],
+  };
+}
+
 // ── Component ───────────────────────────────────────────
 
 export function MusicAgentWindow() {
@@ -63,6 +86,8 @@ export function MusicAgentWindow() {
   const [playbackTime, setPlaybackTime] = useState(0);
   const [playbackDuration, setPlaybackDuration] = useState(0);
   const [playHistory, setPlayHistory] = useState<PlayableTrack[]>([]);
+  const [previousRecommendations, setPreviousRecommendations] = useState<TrackRecommendation[]>([]);
+  const [recommendationQueue, setRecommendationQueue] = useState<TrackRecommendation[]>([]);
   const [toolTraceExpanded, setToolTraceExpanded] = useState(false);
   const [lyricsLoadingTrackId, setLyricsLoadingTrackId] = useState<string | null>(null);
   const [expandedExplanations, setExpandedExplanations] = useState<Record<string, boolean>>({});
@@ -215,6 +240,44 @@ export function MusicAgentWindow() {
     }
   }, []);
 
+  const applyTrackRecommendation = useCallback((
+    data: AgentResolveResponse,
+    recommendation: TrackRecommendation,
+    intro?: string,
+  ) => {
+    const nextResponse: AgentResolveResponse = {
+      ...data,
+      track: recommendation.track,
+      explanationSegments: recommendation.explanationSegments,
+    };
+    const explanationId = `${recommendation.track.id}-${Date.now()}`;
+
+    setResponse(nextResponse);
+    setPlaybackTime(0);
+    setPlaybackDuration(recommendation.track.duration ?? 0);
+    setPlayHistory((prev) => {
+      const next = [recommendation.track, ...prev.filter((item) => item.id !== recommendation.track.id)];
+      return next.slice(0, 40);
+    });
+    setPrevIds((ids) => Array.from(new Set([...ids, recommendation.track.id])));
+    setExpandedExplanations((prev) => ({ ...prev, [explanationId]: true }));
+    setMessages((p) => [
+      ...p,
+      {
+        role: "agent",
+        content: intro ?? `我为你选了《${recommendation.track.title}》${recommendation.track.artist ? ` — ${recommendation.track.artist}` : ""}，听听看。`,
+      },
+      {
+        role: "explanation",
+        id: explanationId,
+        trackTitle: recommendation.track.title,
+        artist: recommendation.track.artist,
+        segments: recommendation.explanationSegments,
+      },
+    ]);
+    void loadLyrics(recommendation.track);
+  }, [loadLyrics]);
+
   const applyResolveResponse = useCallback((data: AgentResolveResponse) => {
     if (data.intent === "chat" && data.chatReply) {
       setMessages((p) => [...p, { role: "agent", content: data.chatReply! }]);
@@ -222,31 +285,13 @@ export function MusicAgentWindow() {
       return;
     }
 
-    if (data.track) {
-      const explanationId = `${data.track.id}-${Date.now()}`;
-      setResponse(data);
-      setPlaybackTime(0);
-      setPlaybackDuration(data.track.duration ?? 0);
-      setPlayHistory((prev) => {
-        const next = [data.track!, ...prev.filter((item) => item.id !== data.track!.id)];
-        return next.slice(0, 40);
-      });
-      setPrevIds((ids) => Array.from(new Set([...ids, data.track!.id])));
-      setExpandedExplanations((prev) => ({ ...prev, [explanationId]: true }));
-      setMessages((p) => [
-        ...p,
-        { role: "agent", content: `我为你选了《${data.track!.title}》${data.track!.artist ? ` — ${data.track!.artist}` : ""}，听听看。` },
-        {
-          role: "explanation",
-          id: explanationId,
-          trackTitle: data.track!.title,
-          artist: data.track!.artist,
-          segments: data.explanationSegments ?? [],
-        },
-      ]);
-      void loadLyrics(data.track);
+    const recommendations = getRecommendations(data);
+    const [firstRecommendation, ...queuedRecommendations] = recommendations;
+    if (firstRecommendation) {
+      setRecommendationQueue(queuedRecommendations);
+      applyTrackRecommendation(data, firstRecommendation);
     }
-  }, [loadLyrics]);
+  }, [applyTrackRecommendation]);
 
   const resolveTrack = useCallback(
     async (text: string, extraPrevIds: string[] = []) => {
@@ -348,6 +393,41 @@ export function MusicAgentWindow() {
     },
     [applyResolveResponse, prevIds, recentConv],
   );
+
+  const playQueuedRecommendation = useCallback((
+    intro?: (recommendation: TrackRecommendation) => string,
+    options: { pushCurrentToPrevious?: boolean } = {},
+  ) => {
+    if (!response || recommendationQueue.length === 0) return false;
+
+    const currentRecommendation = getCurrentRecommendation(response);
+    const nextRecommendation = recommendationQueue[0];
+    if (options.pushCurrentToPrevious !== false && currentRecommendation) {
+      setPreviousRecommendations((stack) => [...stack, currentRecommendation].slice(-20));
+    }
+    setRecommendationQueue((queue) => queue.slice(1));
+    setStatus("playing");
+    applyTrackRecommendation(response, nextRecommendation, intro?.(nextRecommendation));
+    return true;
+  }, [applyTrackRecommendation, recommendationQueue, response]);
+
+  const handlePrevious = useCallback(() => {
+    if (!response || previousRecommendations.length === 0) return;
+
+    const previousRecommendation = previousRecommendations[previousRecommendations.length - 1];
+    const currentRecommendation = getCurrentRecommendation(response);
+    setPreviousRecommendations((stack) => stack.slice(0, -1));
+    if (currentRecommendation) {
+      setRecommendationQueue((queue) => [currentRecommendation, ...queue]);
+    }
+    setStatus("playing");
+    applyTrackRecommendation(
+      response,
+      previousRecommendation,
+      `回到上一首《${previousRecommendation.track.title}》${previousRecommendation.track.artist ? ` — ${previousRecommendation.track.artist}` : ""}。`,
+    );
+  }, [applyTrackRecommendation, previousRecommendations, response]);
+
   // ── Speech ────────────────────────────────────────────
 
   const speech = useSpeechRecognition({
@@ -362,6 +442,8 @@ export function MusicAgentWindow() {
     const t = inputText.trim();
     if (!t) return;
     autoRetryCountRef.current = 0;
+    setPreviousRecommendations([]);
+    setRecommendationQueue([]);
     setMessages((p) => [...p, { role: "user", content: t }]);
     setInputText("");
     void resolveTrack(t);
@@ -382,10 +464,15 @@ export function MusicAgentWindow() {
     setMessages((p) => [
       ...p,
       { role: "user", content: "这首不太对，换一首吧。" },
-      { role: "agent", content: "好的，我换个方向为你找。" },
     ]);
+    if (playQueuedRecommendation()) return;
+    const currentRecommendation = getCurrentRecommendation(response);
+    if (currentRecommendation) {
+      setPreviousRecommendations((stack) => [...stack, currentRecommendation].slice(-20));
+    }
+    setMessages((p) => [...p, { role: "agent", content: "好的，我换个方向为你找。" }]);
     void resolveTrack(lastSubmitted, [track.id]);
-  }, [lastSubmitted, moodProfile, playbackDuration, playbackTime, resolveTrack, track]);
+  }, [lastSubmitted, moodProfile, playQueuedRecommendation, playbackDuration, playbackTime, resolveTrack, response, track]);
 
   const handleEnded = useCallback(() => {
     if (!track || !lastSubmitted) return;
@@ -397,13 +484,20 @@ export function MusicAgentWindow() {
       listenedSeconds: playbackDuration || playbackTime,
       durationSeconds: playbackDuration,
     });
+    if (playQueuedRecommendation((recommendation) => (
+      `这首听完了，接着放《${recommendation.track.title}》${recommendation.track.artist ? ` — ${recommendation.track.artist}` : ""}。`
+    ))) return;
+    const currentRecommendation = getCurrentRecommendation(response);
+    if (currentRecommendation) {
+      setPreviousRecommendations((stack) => [...stack, currentRecommendation].slice(-20));
+    }
     setStatus("ended");
     setMessages((p) => [
       ...p,
-      { role: "agent", content: "这首听完了，我再接着找一首。" },
+      { role: "agent", content: "这三首听完了，我再重新找一组。" },
     ]);
     void resolveTrack(lastSubmitted, [track.id]);
-  }, [lastSubmitted, moodProfile, playbackDuration, playbackTime, resolveTrack, track]);
+  }, [lastSubmitted, moodProfile, playQueuedRecommendation, playbackDuration, playbackTime, resolveTrack, response, track]);
 
   const handlePlay = useCallback(() => {
     autoRetryCountRef.current = 0;
@@ -425,6 +519,14 @@ export function MusicAgentWindow() {
         durationSeconds: playbackDuration,
       });
     }
+    if (track && lastSubmitted && recommendationQueue.length > 0) {
+      autoRetryCountRef.current += 1;
+      setMessages((p) => [
+        ...p,
+        { role: "agent", content: "这首歌没有拿到可播放链接，我先切到备用候选。" },
+      ]);
+      if (playQueuedRecommendation(undefined, { pushCurrentToPrevious: false })) return;
+    }
     if (track && lastSubmitted && autoRetryCountRef.current < 3) {
       autoRetryCountRef.current += 1;
       setMessages((p) => [
@@ -436,7 +538,7 @@ export function MusicAgentWindow() {
     }
     setStatus("error");
     setNotice(reason || "播放出错了，请点击下一首或重新描述感受。");
-  }, [lastSubmitted, moodProfile, playbackDuration, playbackTime, track]);
+  }, [lastSubmitted, moodProfile, playQueuedRecommendation, playbackDuration, playbackTime, recommendationQueue.length, resolveTrack, track]);
 
   const canSubmit = useMemo(
     () => inputText.trim().length > 0 && !["thinking", "searching"].includes(status),
@@ -579,10 +681,12 @@ export function MusicAgentWindow() {
                       status={status}
                       onPlay={handlePlay}
                       onPause={handlePause}
+                      onPrevious={handlePrevious}
                       onError={handlePlayerError}
                       onNext={handleNext}
                       onEnded={handleEnded}
                       onProgress={handlePlayerProgress}
+                      hasPrevious={previousRecommendations.length > 0}
                       voiceCaptureActive={speech.isListening || status === "listening" || status === "transcribing"}
                     />
                   </motion.div>
