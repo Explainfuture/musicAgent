@@ -5,6 +5,11 @@ import type { MoodProfile, PlaybackEvent, UserMusicProfile, WeightedPreference }
 const STORAGE_KEY = "music-agent-user-profile";
 const MAX_SIGNALS = 24;
 const MAX_EVENTS = 30;
+const FLUSH_DEBOUNCE_MS = 600;
+
+let memoryProfile: UserMusicProfile | null = null;
+let flushTimer: number | null = null;
+let lifecycleBound = false;
 
 function emptyProfile(now = new Date().toISOString()): UserMusicProfile {
   return {
@@ -89,18 +94,58 @@ function mergeProfile(raw: unknown): UserMusicProfile {
 
 export function readUserMusicProfile(): UserMusicProfile {
   if (typeof window === "undefined") return emptyProfile();
+  if (memoryProfile) return memoryProfile;
 
   try {
     const rawValue = window.localStorage.getItem(STORAGE_KEY);
-    return rawValue ? mergeProfile(JSON.parse(rawValue)) : emptyProfile();
+    memoryProfile = rawValue ? mergeProfile(JSON.parse(rawValue)) : emptyProfile();
+    bindLifecycleFlush();
+    return memoryProfile;
   } catch {
-    return emptyProfile();
+    memoryProfile = emptyProfile();
+    bindLifecycleFlush();
+    return memoryProfile;
   }
+}
+
+function flushUserMusicProfile() {
+  if (typeof window === "undefined" || !memoryProfile) return;
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(memoryProfile));
+}
+
+function scheduleFlush() {
+  if (typeof window === "undefined") return;
+  if (flushTimer) window.clearTimeout(flushTimer);
+  flushTimer = window.setTimeout(() => {
+    flushTimer = null;
+    flushUserMusicProfile();
+  }, FLUSH_DEBOUNCE_MS);
+}
+
+function bindLifecycleFlush() {
+  if (typeof window === "undefined" || lifecycleBound) return;
+
+  const flushNow = () => {
+    if (flushTimer) {
+      window.clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    flushUserMusicProfile();
+  };
+
+  window.addEventListener("beforeunload", flushNow);
+  window.addEventListener("pagehide", flushNow);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") flushNow();
+  });
+  lifecycleBound = true;
 }
 
 function writeUserMusicProfile(profile: UserMusicProfile) {
   if (typeof window === "undefined") return profile;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
+  memoryProfile = profile;
+  bindLifecycleFlush();
+  scheduleFlush();
   return profile;
 }
 
