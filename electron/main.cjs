@@ -110,7 +110,7 @@ function setupIPC() {
     const cookie = await loginQQMusic(win);
     if (cookie) {
       saveCookie(cookie);
-      return { success: true, cookie };
+      return { success: true };
     }
     return { success: false };
   });
@@ -118,7 +118,7 @@ function setupIPC() {
   // Check if cookie is saved
   ipcMain.handle("qqmusic:cookie-status", () => {
     const cookie = readSavedCookie();
-    return { loggedIn: Boolean(cookie), cookie: cookie || "" };
+    return { loggedIn: Boolean(cookie) };
   });
 
 

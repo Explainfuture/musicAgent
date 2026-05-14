@@ -1,8 +1,8 @@
 export type MusicAgentShell = {
   platform: string;
   isElectron: boolean;
-  loginQQMusic: () => Promise<{ success: boolean; cookie?: string }>;
-  getQQMusicCookieStatus: () => Promise<{ loggedIn: boolean; cookie: string }>;
+  loginQQMusic: () => Promise<{ success: boolean }>;
+  getQQMusicCookieStatus: () => Promise<{ loggedIn: boolean }>;
   logoutQQMusic: () => Promise<{ success: boolean }>;
   getQQMusicPlayUrl: (songmid: string) => Promise<{ url: string | null; error: string | null }>;
   getMicrophoneStatus?: () => Promise<{

@@ -7,9 +7,11 @@
     "dev": "next dev",
     "electron": "concurrently -k \"next dev\" \"wait-on http://localhost:3000 && electron .\"",
     "electron:dev": "npm run electron",
+    "electron:start": "concurrently -k \"next start\" \"wait-on http://localhost:3000 && electron .\"",
     "build": "next build",
     "start": "next start",
     "lint": "tsc --noEmit",
+    "test": "node --test --experimental-strip-types tests/*.test.mjs",
     "typecheck": "next typegen && tsc --noEmit"
   },
   "dependencies": {

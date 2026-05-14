@@ -7,6 +7,7 @@ import { AgentOrb } from "./AgentOrb";
 import { MicButton } from "./MicButton";
 import { PlayerCard } from "./PlayerCard";
 import { StatusIndicator } from "./StatusIndicator";
+import { FeedbackBar } from "./FeedbackBar";
 import { Button } from "@/components/ui/button";
 import { readFeedbackMemory, saveFeedbackRecord } from "@/lib/storage/feedbackMemory";
 import { readUserMusicProfile, updateUserMusicProfile } from "@/lib/storage/userMusicProfile";
@@ -17,6 +18,7 @@ import type {
   AgentResolveStreamEvent,
   AgentStatus,
   AgentToolTrace,
+  FeedbackType,
   TrackRecommendation,
 } from "@/types/agent";
 import type { PlayableTrack, TimedLyricLine } from "@/types/music";
@@ -305,6 +307,7 @@ export function MusicAgentWindow() {
       const allPrevIds = Array.from(new Set([...prevIds, ...extraPrevIds]));
       const feedbackMemory = readFeedbackMemory();
       const userMusicProfile = readUserMusicProfile();
+      const playbackMode = window.musicAgentShell?.isElectron ? "electron" : "web";
       setToolTrace((prev) => [
         ...prev,
         {
@@ -323,6 +326,7 @@ export function MusicAgentWindow() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             text: trimmed,
+            playbackMode,
             previousTrackIds: allPrevIds,
             feedbackMemory,
             userMusicProfile,
@@ -340,6 +344,7 @@ export function MusicAgentWindow() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               text: trimmed,
+              playbackMode,
               previousTrackIds: allPrevIds,
               feedbackMemory,
               userMusicProfile,
@@ -540,6 +545,22 @@ export function MusicAgentWindow() {
     setNotice(reason || "播放出错了，请点击下一首或重新描述感受。");
   }, [lastSubmitted, moodProfile, playQueuedRecommendation, playbackDuration, playbackTime, recommendationQueue.length, resolveTrack, track]);
 
+  const handleFeedback = useCallback((feedback: FeedbackType) => {
+    if (!track || !lastSubmitted) return;
+
+    saveFeedbackRecord({ track, feedback, originalText: lastSubmitted });
+    updateUserMusicProfile({
+      type: "manual_feedback",
+      feedback,
+      track,
+      moodProfile,
+      originalText: lastSubmitted,
+      listenedSeconds: playbackTime,
+      durationSeconds: playbackDuration,
+    });
+    setNotice(feedback === "good_fit" ? "收到，这个方向会记住。" : "收到，我会少往这个方向推荐。");
+  }, [lastSubmitted, moodProfile, playbackDuration, playbackTime, track]);
+
   const canSubmit = useMemo(
     () => inputText.trim().length > 0 && !["thinking", "searching"].includes(status),
     [inputText, status],
@@ -689,6 +710,12 @@ export function MusicAgentWindow() {
                       hasPrevious={previousRecommendations.length > 0}
                       voiceCaptureActive={speech.isListening || status === "listening" || status === "transcribing"}
                     />
+                    <div className="mt-3">
+                      <FeedbackBar
+                        disabled={!track || status === "thinking" || status === "searching"}
+                        onFeedback={handleFeedback}
+                      />
+                    </div>
                   </motion.div>
                 ) : (
                   <motion.div

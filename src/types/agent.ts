@@ -67,6 +67,7 @@ export type UserMusicProfile = {
   bpmHints: string[];
   recentEvents: Array<{
     type: PlaybackEventType;
+    feedback?: FeedbackType;
     trackId: string;
     source: PlayableTrack["source"];
     title: string;
@@ -83,6 +84,7 @@ export type UserMusicProfile = {
 
 export type PlaybackEvent = {
   type: PlaybackEventType;
+  feedback?: FeedbackType;
   track: PlayableTrack;
   moodProfile?: MoodProfile;
   originalText?: string;
@@ -104,6 +106,7 @@ export type AgentResolveStreamEvent =
 
 export type AgentResolveRequest = {
   text: string;
+  playbackMode?: "electron" | "web";
   previousTrackIds?: string[];
   feedbackMemory?: FeedbackRecord[];
   userMusicProfile?: UserMusicProfile;

@@ -160,11 +160,12 @@ function skippedWeight(event: PlaybackEvent) {
 
 function positiveWeight(event: PlaybackEvent) {
   if (event.type === "completed") return 0.75;
-  if (event.type === "manual_feedback") return 1;
+  if (event.type === "manual_feedback" && event.feedback === "good_fit") return 1;
   return 0;
 }
 
 function negativeWeight(event: PlaybackEvent) {
+  if (event.type === "manual_feedback" && event.feedback && event.feedback !== "good_fit") return 1.25;
   return event.type === "skipped" ? skippedWeight(event) : 0;
 }
 
@@ -223,6 +224,7 @@ export function updateUserMusicProfile(event: PlaybackEvent): UserMusicProfile {
     recentEvents: [
       {
         type: event.type,
+        feedback: event.feedback,
         trackId: event.track.id,
         source: event.track.source,
         title: event.track.title,

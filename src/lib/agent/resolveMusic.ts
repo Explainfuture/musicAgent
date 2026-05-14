@@ -10,6 +10,9 @@ import {
 } from "@/lib/ai/prompts";
 import { moodProfileSchema, selectedTracksSchema } from "@/lib/ai/schemas";
 import { rankTracks } from "@/lib/music/normalize";
+import { searchAudiusTracks } from "@/lib/music/audius";
+import { fallbackTracks } from "@/lib/music/fallbackTracks";
+import { searchJamendoTracks } from "@/lib/music/jamendo";
 import { searchQQMusicTracks } from "@/lib/music/qqmusic";
 import type {
   AgentResolveRequest,
@@ -18,6 +21,7 @@ import type {
   MoodProfile,
   TrackRecommendation,
 } from "@/types/agent";
+import type { PlayableTrack } from "@/types/music";
 
 type TraceEmitter = (trace: AgentToolTrace) => void;
 
@@ -136,24 +140,55 @@ async function parseMoodFallback(
   }
 }
 
-async function searchCandidates(moodProfile: MoodProfile, diagnostics: string[], addTrace: TraceEmitter) {
+async function searchCandidates(
+  moodProfile: MoodProfile,
+  body: AgentResolveRequest,
+  diagnostics: string[],
+  addTrace: TraceEmitter,
+) {
   const genre = moodProfile.searchGenre || "";
   const cleanKeywords = moodProfile.keywords.slice(0, 3);
   const searchProfile = {
     ...moodProfile,
     keywords: [...cleanKeywords, genre].filter(Boolean).slice(0, 4),
   };
+  const searches: Array<{
+    label: string;
+    run: () => Promise<PlayableTrack[]>;
+  }> = body.playbackMode === "electron"
+    ? [
+        { label: "QQ 音乐", run: () => searchQQMusicTracks(searchProfile, 15) },
+        { label: "Audius", run: () => searchAudiusTracks(moodProfile, 8) },
+        { label: "Jamendo", run: () => searchJamendoTracks(moodProfile, 8) },
+      ]
+    : [
+        { label: "Audius", run: () => searchAudiusTracks(moodProfile, 10) },
+        { label: "Jamendo", run: () => searchJamendoTracks(moodProfile, 10) },
+      ];
+  const candidates: PlayableTrack[] = [];
 
-  addTrace({ step: "曲库检索", status: "running", detail: "正在从 QQ 音乐曲库检索候选歌曲…" });
-  try {
-    const candidates = await searchQQMusicTracks(searchProfile);
-    addTrace({ step: "曲库检索", status: "success", detail: `候选数量：${candidates.length}` });
-    return candidates;
-  } catch (err) {
-    diagnostics.push(err instanceof Error ? err.message : String(err));
-    addTrace({ step: "曲库检索", status: "failed", detail: "QQ 音乐暂时没有返回可用候选。" });
-    return [];
+  for (const source of searches) {
+    addTrace({ step: "曲库检索", status: "running", detail: `正在从 ${source.label} 检索候选歌曲…` });
+    try {
+      const sourceCandidates = await source.run();
+      candidates.push(...sourceCandidates);
+      addTrace({
+        step: "曲库检索",
+        status: sourceCandidates.length ? "success" : "failed",
+        detail: `${source.label} 候选数量：${sourceCandidates.length}`,
+      });
+    } catch (err) {
+      diagnostics.push(`${source.label}: ${err instanceof Error ? err.message : String(err)}`);
+      addTrace({ step: "曲库检索", status: "failed", detail: `${source.label} 暂时没有返回可用候选。` });
+    }
   }
+
+  if (candidates.length === 0 && fallbackTracks.length > 0) {
+    addTrace({ step: "曲库检索", status: "success", detail: `使用内置候选数量：${fallbackTracks.length}` });
+    return fallbackTracks;
+  }
+
+  return candidates;
 }
 
 async function selectTracks(input: {
@@ -259,7 +294,7 @@ export async function resolveMusicAgent(
     moodProfile = await parseMoodFallback(text, body, diagnostics, addTrace);
   }
 
-  const rawCandidates = await searchCandidates(moodProfile, diagnostics, addTrace);
+  const rawCandidates = await searchCandidates(moodProfile, body, diagnostics, addTrace);
 
   addTrace({ step: "排序", status: "running", detail: "正在结合用户画像和最近跳过记录排序候选歌曲。" });
   let candidates = rankTracks(
@@ -267,10 +302,11 @@ export async function resolveMusicAgent(
     moodProfile,
     body.previousTrackIds,
     body.userMusicProfile,
+    body.feedbackMemory,
   ).slice(0, 10);
 
   if (candidates.length === 0 && body.previousTrackIds?.length) {
-    candidates = rankTracks(rawCandidates, moodProfile, [], body.userMusicProfile).slice(0, 10);
+    candidates = rankTracks(rawCandidates, moodProfile, [], body.userMusicProfile, body.feedbackMemory).slice(0, 10);
   }
 
   if (candidates.length === 0) {
