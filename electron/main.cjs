@@ -48,7 +48,7 @@ function createWindow() {
     minWidth: 1080,
     minHeight: 720,
     backgroundColor: "#faf8f7",
-    title: "MoodPlayer Agent",
+    title: "ccSongs",
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -102,6 +102,18 @@ function setupIPC() {
       return { success: true };
     }
     return { success: false };
+  });
+
+  ipcMain.handle("memory:export", async (_event, payload) => {
+    try {
+      const desktop = app.getPath("desktop");
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const filePath = path.join(desktop, `moodplayer-memory-${timestamp}.json`);
+      fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), "utf-8");
+      return { success: true, path: filePath };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
   });
 
   // QQ Music login flow

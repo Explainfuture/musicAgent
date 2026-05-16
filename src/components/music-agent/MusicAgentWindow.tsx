@@ -10,6 +10,16 @@ import { StatusIndicator } from "./StatusIndicator";
 import { FeedbackBar } from "./FeedbackBar";
 import { Button } from "@/components/ui/button";
 import { readFeedbackMemory, saveFeedbackRecord } from "@/lib/storage/feedbackMemory";
+import {
+  clearLikedTracks,
+  clearPlayedHistory,
+  getTrackKey,
+  isTrackLiked,
+  readPlaybackLibrary,
+  recordPlayedTrack,
+  setTrackLiked,
+} from "@/lib/storage/playbackLibrary";
+import type { LikedTrackEntry, PlayedTrackEntry } from "@/lib/storage/playbackLibrary";
 import { readUserMusicProfile, updateUserMusicProfile } from "@/lib/storage/userMusicProfile";
 import { useSpeechRecognition } from "@/lib/speech/useSpeechRecognition";
 import { cn } from "@/lib/utils";
@@ -28,12 +38,16 @@ import {
   ChevronDown,
   ChevronRight,
   Clock3,
+  Download,
+  Heart,
   ListMusic,
   LogIn,
   LogOut,
   MessageCircle,
   Music,
   SendHorizontal,
+  Trash2,
+  X,
 } from "lucide-react";
 
 // ── Types ──────────────────────────────────────────────
@@ -52,6 +66,19 @@ type LyricDisplayLine = {
   text: string;
   time?: number;
 };
+
+type HistoryTab = "played" | "liked";
+
+const HISTORY_PAGE_SIZE = 15;
+
+function getTotalPages(total: number) {
+  return Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
+}
+
+function getPagedItems<T>(items: T[], page: number) {
+  const start = (page - 1) * HISTORY_PAGE_SIZE;
+  return items.slice(start, start + HISTORY_PAGE_SIZE);
+}
 
 function getRecommendations(data: AgentResolveResponse): TrackRecommendation[] {
   if (data.recommendations?.length) return data.recommendations;
@@ -81,24 +108,38 @@ export function MusicAgentWindow() {
   const [notice, setNotice] = useState("");
   const [toolTrace, setToolTrace] = useState<AgentToolTrace[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: "agent", content: "嗨，我是你的音乐伙伴。告诉我你现在的感受，我会为你挑一首最适合此刻的歌。" },
+    { role: "agent", content: "嗨，我是 cc。告诉我你现在的感受，我会为你挑一首最适合此刻的歌。" },
   ]);
   const [qqLoggedIn, setQqLoggedIn] = useState(false);
   const [qqLoggingIn, setQqLoggingIn] = useState(false);
   const [playbackTime, setPlaybackTime] = useState(0);
   const [playbackDuration, setPlaybackDuration] = useState(0);
-  const [playHistory, setPlayHistory] = useState<PlayableTrack[]>([]);
+  const [playHistory, setPlayHistory] = useState<PlayedTrackEntry[]>([]);
+  const [likedTracks, setLikedTracks] = useState<LikedTrackEntry[]>([]);
   const [previousRecommendations, setPreviousRecommendations] = useState<TrackRecommendation[]>([]);
   const [recommendationQueue, setRecommendationQueue] = useState<TrackRecommendation[]>([]);
   const [toolTraceExpanded, setToolTraceExpanded] = useState(false);
   const [lyricsLoadingTrackId, setLyricsLoadingTrackId] = useState<string | null>(null);
   const [expandedExplanations, setExpandedExplanations] = useState<Record<string, boolean>>({});
+  const [historyPanelOpen, setHistoryPanelOpen] = useState(false);
+  const [historyTab, setHistoryTab] = useState<HistoryTab>("played");
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyPageInput, setHistoryPageInput] = useState("");
+  const [clearConfirm, setClearConfirm] = useState<HistoryTab | null>(null);
+  const [exportingMemory, setExportingMemory] = useState(false);
   const autoRetryCountRef = useRef(0);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lyricLineRefs = useRef<Array<RefObject<HTMLParagraphElement | null>>>([]);
   const track = response?.track ?? null;
   const moodProfile = response?.moodProfile;
+  const currentTrackLiked = useMemo(() => isTrackLiked(track, likedTracks), [likedTracks, track]);
+  const activeHistoryItems: Array<PlayedTrackEntry | LikedTrackEntry> = historyTab === "played" ? playHistory : likedTracks;
+  const historyTotalPages = getTotalPages(activeHistoryItems.length);
+  const pagedHistoryItems = useMemo(
+    () => getPagedItems(activeHistoryItems, Math.min(historyPage, historyTotalPages)),
+    [activeHistoryItems, historyPage, historyTotalPages],
+  );
 
   const lyricLines = useMemo<LyricDisplayLine[]>(() => {
     if (track?.timedLyrics?.length) {
@@ -135,12 +176,13 @@ export function MusicAgentWindow() {
       item.status === "running" ? { ...item, status: "success" as const } : item,
     );
   }, [status, toolTrace]);
-  const activeToolDetail = useMemo(() => {
+  const activeToolTrace = useMemo(() => {
     if (status === "thinking" || status === "searching") {
-      return displayedToolTrace.find((item) => item.status === "running")?.detail;
+      return displayedToolTrace.find((item) => item.status === "running");
     }
-    return displayedToolTrace.at(-1)?.detail;
+    return displayedToolTrace.at(-1);
   }, [displayedToolTrace, status]);
+  const activeToolDetail = activeToolTrace?.detail;
 
 
   // QQ Music auth check
@@ -149,6 +191,22 @@ export function MusicAgentWindow() {
       window.musicAgentShell.getQQMusicCookieStatus().then((s) => setQqLoggedIn(s.loggedIn));
     }
   }, []);
+
+  useEffect(() => {
+    const library = readPlaybackLibrary();
+    setPlayHistory(library.played);
+    setLikedTracks(library.liked);
+  }, []);
+
+  useEffect(() => {
+    if (!clearConfirm) return;
+    const timer = window.setTimeout(() => setClearConfirm(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [clearConfirm]);
+
+  useEffect(() => {
+    setHistoryPage((page) => Math.min(page, historyTotalPages));
+  }, [historyTotalPages]);
   const handleQQLogin = async () => {
     if (!window.musicAgentShell?.isElectron) return;
     setQqLoggingIn(true);
@@ -257,26 +315,28 @@ export function MusicAgentWindow() {
     setResponse(nextResponse);
     setPlaybackTime(0);
     setPlaybackDuration(recommendation.track.duration ?? 0);
-    setPlayHistory((prev) => {
-      const next = [recommendation.track, ...prev.filter((item) => item.id !== recommendation.track.id)];
-      return next.slice(0, 40);
-    });
+    setPlayHistory(recordPlayedTrack(recommendation.track).played);
     setPrevIds((ids) => Array.from(new Set([...ids, recommendation.track.id])));
     setExpandedExplanations((prev) => ({ ...prev, [explanationId]: true }));
-    setMessages((p) => [
+    setMessages((p) => {
+      const nextMessages: ChatMessage[] = [
       ...p,
       {
         role: "agent",
         content: intro ?? `我为你选了《${recommendation.track.title}》${recommendation.track.artist ? ` — ${recommendation.track.artist}` : ""}，听听看。`,
       },
-      {
-        role: "explanation",
-        id: explanationId,
-        trackTitle: recommendation.track.title,
-        artist: recommendation.track.artist,
-        segments: recommendation.explanationSegments,
-      },
-    ]);
+    ];
+      if (recommendation.explanationSegments.length > 0) {
+        nextMessages.push({
+          role: "explanation",
+          id: explanationId,
+          trackTitle: recommendation.track.title,
+          artist: recommendation.track.artist,
+          segments: recommendation.explanationSegments,
+        });
+      }
+      return nextMessages;
+    });
     void loadLyrics(recommendation.track);
   }, [loadLyrics]);
 
@@ -561,6 +621,130 @@ export function MusicAgentWindow() {
     setNotice(feedback === "good_fit" ? "收到，这个方向会记住。" : "收到，我会少往这个方向推荐。");
   }, [lastSubmitted, moodProfile, playbackDuration, playbackTime, track]);
 
+  const handleToggleLike = useCallback(() => {
+    if (!track) return;
+
+    const nextLiked = !currentTrackLiked;
+    const library = setTrackLiked(track, nextLiked);
+    setLikedTracks(library.liked);
+
+    if (nextLiked) {
+      const originalText = lastSubmitted || "红心收藏";
+      saveFeedbackRecord({ track, feedback: "good_fit", originalText });
+      updateUserMusicProfile({
+        type: "manual_feedback",
+        feedback: "good_fit",
+        track,
+        moodProfile,
+        originalText,
+        listenedSeconds: playbackTime,
+        durationSeconds: playbackDuration,
+      });
+      setNotice("已收藏，这个方向会记住。");
+    } else {
+      setNotice("已取消收藏。");
+    }
+  }, [currentTrackLiked, lastSubmitted, moodProfile, playbackDuration, playbackTime, track]);
+
+  const openHistoryPanel = useCallback(() => {
+    setHistoryPanelOpen(true);
+    setHistoryTab("played");
+    setHistoryPage(1);
+    setHistoryPageInput("");
+    setClearConfirm(null);
+  }, []);
+
+  const closeHistoryPanel = useCallback(() => {
+    setHistoryPanelOpen(false);
+    setHistoryPageInput("");
+    setClearConfirm(null);
+  }, []);
+
+  const switchHistoryTab = useCallback((tab: HistoryTab) => {
+    setHistoryTab(tab);
+    setHistoryPage(1);
+    setHistoryPageInput("");
+    setClearConfirm(null);
+  }, []);
+
+  const jumpHistoryPage = useCallback(() => {
+    const rawPage = Number.parseInt(historyPageInput, 10);
+    if (!Number.isFinite(rawPage)) {
+      setHistoryPageInput("");
+      return;
+    }
+    setHistoryPage(Math.min(Math.max(rawPage, 1), historyTotalPages));
+    setHistoryPageInput("");
+  }, [historyPageInput, historyTotalPages]);
+
+  const handleClearHistory = useCallback((target: HistoryTab) => {
+    if (clearConfirm !== target) {
+      setClearConfirm(target);
+      return;
+    }
+
+    const library = target === "played" ? clearPlayedHistory() : clearLikedTracks();
+    setPlayHistory(library.played);
+    setLikedTracks(library.liked);
+    setHistoryPage(1);
+    setHistoryPageInput("");
+    setClearConfirm(null);
+  }, [clearConfirm]);
+
+  const playLibraryTrack = useCallback((selectedTrack: PlayableTrack) => {
+    const nextResponse: AgentResolveResponse = response
+      ? { ...response, track: selectedTrack, explanationSegments: [] }
+      : {
+          intent: "music",
+          track: selectedTrack,
+          explanationSegments: [],
+          recommendations: [{ track: selectedTrack, explanationSegments: [] }],
+        };
+
+    setRecommendationQueue([]);
+    setPreviousRecommendations((stack) => {
+      const currentRecommendation = getCurrentRecommendation(response);
+      return currentRecommendation ? [...stack, currentRecommendation].slice(-20) : stack;
+    });
+    setStatus("playing");
+    applyTrackRecommendation(nextResponse, { track: selectedTrack, explanationSegments: [] }, `继续播放《${selectedTrack.title}》${selectedTrack.artist ? ` — ${selectedTrack.artist}` : ""}。`);
+    closeHistoryPanel();
+  }, [applyTrackRecommendation, closeHistoryPanel, response]);
+
+  const handleExportMemory = useCallback(async () => {
+    if (exportingMemory) return;
+
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      playbackLibrary: readPlaybackLibrary(),
+      feedbackMemory: readFeedbackMemory(),
+      userMusicProfile: readUserMusicProfile(),
+    };
+    setExportingMemory(true);
+
+    try {
+      if (window.musicAgentShell?.exportMemory) {
+        const result = await window.musicAgentShell.exportMemory(payload);
+        if (!result.success) throw new Error(result.error || "导出失败");
+        setNotice(result.path ? `已导出到桌面：${result.path}` : "已导出到桌面。");
+        return;
+      }
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `moodplayer-memory-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+      link.click();
+      window.URL.revokeObjectURL(url);
+      setNotice("已导出记忆 JSON。");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "导出失败。");
+    } finally {
+      setExportingMemory(false);
+    }
+  }, [exportingMemory]);
+
   const canSubmit = useMemo(
     () => inputText.trim().length > 0 && !["thinking", "searching"].includes(status),
     [inputText, status],
@@ -577,7 +761,7 @@ export function MusicAgentWindow() {
               <AgentOrb status={status} />
               <div className="min-w-0">
                 <h1 className="truncate text-base font-semibold tracking-tight text-foreground">
-                  MoodPlayer
+                  ccSongs
                 </h1>
                 <p className="truncate text-xs text-muted/65">用音乐理解每一种情绪</p>
               </div>
@@ -625,13 +809,18 @@ export function MusicAgentWindow() {
           </div>
 
           <div className="mt-4 min-h-0 flex-1 border-t border-border/35 px-3 py-3">
-            <div className="mb-3 flex items-center justify-between px-1">
+            <button
+              type="button"
+              onClick={openHistoryPanel}
+              className="mb-3 flex w-full cursor-pointer items-center justify-between rounded-xl px-1 py-1 text-left transition-colors hover:bg-white/45 focus-visible:ring-2 focus-visible:ring-rose/30"
+              aria-label="打开历史播放"
+            >
               <div className="flex items-center gap-2 text-xs font-semibold text-foreground/75">
                 <ListMusic size={15} className="text-rose/70" aria-hidden="true" />
                 历史播放
               </div>
               <span className="text-[11px] tabular-nums text-muted/60">{playHistory.length} 首</span>
-            </div>
+            </button>
 
             {playHistory.length === 0 ? (
               <p className="rounded-2xl border border-white/70 bg-white/55 px-3 py-3 text-xs leading-5 text-muted/65">
@@ -639,16 +828,18 @@ export function MusicAgentWindow() {
               </p>
             ) : (
               <div className="no-scrollbar h-full space-y-2 overflow-y-auto pr-1">
-                {playHistory.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex min-w-0 items-center gap-2 rounded-2xl border border-white/70 bg-white/55 px-2.5 py-2"
+                {playHistory.slice(0, 5).map((item) => (
+                  <button
+                    key={getTrackKey(item.track)}
+                    type="button"
+                    onClick={() => playLibraryTrack(item.track)}
+                    className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-2xl border border-white/70 bg-white/55 px-2.5 py-2 text-left transition-colors hover:bg-white focus-visible:ring-2 focus-visible:ring-rose/30"
                   >
                     <div className="h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-rose-surface">
-                      {item.coverUrl ? (
+                      {item.track.coverUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
-                          src={item.coverUrl}
+                          src={item.track.coverUrl}
                           alt=""
                           width={44}
                           height={44}
@@ -662,10 +853,10 @@ export function MusicAgentWindow() {
                       )}
                     </div>
                     <div className="min-w-0">
-                      <p className="truncate text-xs font-medium text-foreground/85">{item.title}</p>
-                      <p className="truncate text-[11px] text-muted/60">{item.artist || "未知歌手"}</p>
+                      <p className="truncate text-xs font-medium text-foreground/85">{item.track.title}</p>
+                      <p className="truncate text-[11px] text-muted/60">{item.track.artist || "未知歌手"}</p>
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
@@ -707,6 +898,8 @@ export function MusicAgentWindow() {
                       onNext={handleNext}
                       onEnded={handleEnded}
                       onProgress={handlePlayerProgress}
+                      liked={currentTrackLiked}
+                      onToggleLike={handleToggleLike}
                       hasPrevious={previousRecommendations.length > 0}
                       voiceCaptureActive={speech.isListening || status === "listening" || status === "transcribing"}
                     />
@@ -789,18 +982,184 @@ export function MusicAgentWindow() {
           </div>
         </section>
 
-        <section className="flex min-h-0 min-w-0 flex-col rounded-[28px] border border-white/70 bg-white/45 shadow-sm backdrop-blur-xl">
+        <section className="relative flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[28px] border border-white/70 bg-white/45 shadow-sm backdrop-blur-xl">
           <div className="flex h-14 shrink-0 items-center justify-between border-b border-border/30 px-5">
             <div className="flex items-center gap-2">
               <MessageCircle size={17} className="text-rose/70" aria-hidden="true" />
               <h2 className="text-sm font-semibold text-foreground/80">对话</h2>
             </div>
-            {qqLoggedIn && (
-              <span className="rounded-full bg-success/10 px-2.5 py-1 text-[11px] font-medium text-success/75">
-                QQ 曲库
-              </span>
-            )}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleExportMemory}
+                disabled={exportingMemory}
+                className="flex h-8 cursor-pointer items-center gap-1.5 rounded-full bg-white/65 px-3 text-[11px] font-medium text-muted/70 transition-colors hover:bg-rose-surface hover:text-rose disabled:cursor-default disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-rose/30"
+              >
+                <Download size={13} aria-hidden="true" />
+                {exportingMemory ? "导出中" : "导出我的记忆"}
+              </button>
+              {qqLoggedIn && (
+                <span className="rounded-full bg-success/10 px-2.5 py-1 text-[11px] font-medium text-success/75">
+                  QQ 曲库
+                </span>
+              )}
+            </div>
           </div>
+
+          <AnimatePresence initial={false}>
+            {historyPanelOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 12 }}
+                transition={{ duration: 0.18 }}
+                className="absolute inset-x-4 top-16 bottom-28 z-20 flex flex-col rounded-[24px] border border-white/75 bg-white/90 p-4 shadow-xl backdrop-blur-xl"
+              >
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <ListMusic size={16} className="shrink-0 text-rose/70" aria-hidden="true" />
+                    <h3 className="truncate text-sm font-semibold text-foreground/80">历史播放</h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeHistoryPanel}
+                    aria-label="关闭历史播放"
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted/65 transition-colors hover:bg-rose-surface hover:text-rose focus-visible:ring-2 focus-visible:ring-rose/30"
+                  >
+                    <X size={16} aria-hidden="true" />
+                  </button>
+                </div>
+
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <div className="grid grid-cols-2 rounded-2xl bg-surface/70 p-1 text-xs font-medium">
+                    {(["played", "liked"] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        onClick={() => switchHistoryTab(tab)}
+                        className={cn(
+                          "rounded-xl px-3 py-1.5 transition-colors focus-visible:ring-2 focus-visible:ring-rose/30",
+                          historyTab === tab ? "bg-white text-foreground shadow-xs" : "text-muted/65 hover:text-foreground/75",
+                        )}
+                      >
+                        {tab === "played" ? "已播放" : "已点赞"}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleClearHistory(historyTab)}
+                    disabled={activeHistoryItems.length === 0}
+                    className="flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-white/70 px-3 text-[11px] font-medium text-muted/65 transition-colors hover:bg-rose-surface hover:text-rose disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-rose/30"
+                  >
+                    <Trash2 size={13} aria-hidden="true" />
+                    {clearConfirm === historyTab ? "确认清空" : historyTab === "played" ? "清空已播放" : "清空已点赞"}
+                  </button>
+                </div>
+
+                <div className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+                  {activeHistoryItems.length === 0 ? (
+                    <div className="grid h-full place-items-center rounded-2xl border border-white/70 bg-white/55 px-4 text-center text-xs leading-5 text-muted/65">
+                      {historyTab === "played" ? "还没有播放记录。" : "还没有点赞收藏。"}
+                    </div>
+                  ) : (
+                    pagedHistoryItems.map((entry) => {
+                      const playCount = "playCount" in entry ? entry.playCount : undefined;
+                      const liked = isTrackLiked(entry.track, likedTracks);
+
+                      return (
+                        <div
+                          key={getTrackKey(entry.track)}
+                          className="flex w-full min-w-0 items-center gap-2 rounded-2xl border border-white/70 bg-white/65 px-2 py-2 transition-colors hover:bg-white"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => playLibraryTrack(entry.track)}
+                            className="flex min-w-0 flex-1 items-center gap-3 rounded-xl px-1 text-left focus-visible:ring-2 focus-visible:ring-rose/30"
+                          >
+                            <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-rose-surface">
+                              {entry.track.coverUrl ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={entry.track.coverUrl}
+                                  alt=""
+                                  width={48}
+                                  height={48}
+                                  loading="lazy"
+                                  className="h-full w-full object-cover"
+                                />
+                              ) : (
+                                <div className="grid h-full w-full place-items-center">
+                                  <Music size={17} className="text-rose/35" aria-hidden="true" />
+                                </div>
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-xs font-semibold text-foreground/85">{entry.track.title}</p>
+                              <p className="truncate text-[11px] text-muted/60">{entry.track.artist || "未知歌手"}</p>
+                              {playCount !== undefined && (
+                                <p className="mt-0.5 text-[11px] text-muted/50">播放 {playCount} 次</p>
+                              )}
+                            </div>
+                          </button>
+                          {historyTab === "liked" && (
+                            <button
+                              type="button"
+                              aria-label={liked ? "取消收藏" : "收藏这首歌"}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                const library = setTrackLiked(entry.track, !liked);
+                                setLikedTracks(library.liked);
+                                setNotice(liked ? "已取消收藏。" : "已收藏。");
+                              }}
+                              className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-rose transition-colors hover:bg-rose-surface focus-visible:ring-2 focus-visible:ring-rose/30"
+                            >
+                              <Heart size={17} fill={liked ? "currentColor" : "none"} aria-hidden="true" />
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/30 pt-3 text-xs text-muted/65">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={historyPage <= 1}
+                    onClick={() => setHistoryPage((page) => Math.max(1, page - 1))}
+                  >
+                    上一页
+                  </Button>
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="shrink-0 tabular-nums">第 {Math.min(historyPage, historyTotalPages)} / {historyTotalPages} 页</span>
+                    <input
+                      value={historyPageInput}
+                      onChange={(event) => setHistoryPageInput(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") jumpHistoryPage();
+                      }}
+                      inputMode="numeric"
+                      aria-label="跳转页码"
+                      placeholder="页码"
+                      className="h-8 w-14 rounded-xl border border-border/45 bg-white/70 px-2 text-center text-xs text-foreground outline-none focus:border-rose/30 focus-visible:ring-2 focus-visible:ring-rose/20"
+                    />
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={historyPage >= historyTotalPages}
+                    onClick={() => setHistoryPage((page) => Math.min(historyTotalPages, page + 1))}
+                  >
+                    下一页
+                  </Button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-5 py-4">
             <div className="space-y-3">
@@ -901,9 +1260,16 @@ export function MusicAgentWindow() {
                     )}
                   </button>
 
-                  {activeToolDetail && (
-                    <div className="mt-2 rounded-2xl bg-white/60 px-3 py-2 text-xs leading-5 text-foreground/70" aria-live="polite">
-                      {activeToolDetail}
+                  {activeToolTrace && (
+                    <div className="silver-flow-card mt-2 rounded-2xl px-3 py-2 text-xs leading-5 text-foreground/70" aria-live="polite">
+                      <span className="font-medium text-foreground/78">{activeToolTrace.step}</span>
+                      <span className="mx-1 text-muted/45">/</span>
+                      <span className={cn(
+                        activeToolTrace.status === "failed" ? "text-amber-700/80" : activeToolTrace.status === "running" ? "text-rose/75" : "text-success/80",
+                      )}>
+                        {activeToolTrace.status === "running" ? "执行中" : activeToolTrace.status === "success" ? "完成" : "失败"}
+                      </span>
+                      <span className="ml-1 text-muted/75">{activeToolTrace.detail}</span>
                     </div>
                   )}
 

@@ -2,7 +2,7 @@
 
 import { ChangeEvent, PointerEvent, useCallback, useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Play, Pause, SkipBack, SkipForward, Music } from "lucide-react";
+import { Play, Pause, SkipBack, SkipForward, Music, Heart } from "lucide-react";
 import type { AgentStatus } from "@/types/agent";
 import type { PlayableTrack } from "@/types/music";
 
@@ -42,6 +42,8 @@ export function PlayerCard({
   onNext,
   onEnded,
   onProgress,
+  liked,
+  onToggleLike,
   hasPrevious,
   voiceCaptureActive,
 }: {
@@ -54,6 +56,8 @@ export function PlayerCard({
   onNext: () => void;
   onEnded: () => void;
   onProgress?: (current: number, duration: number) => void;
+  liked: boolean;
+  onToggleLike: () => void;
   hasPrevious: boolean;
   voiceCaptureActive: boolean;
 }) {
@@ -276,9 +280,25 @@ export function PlayerCard({
           </p>
           <p className="truncate text-sm font-semibold text-foreground">{track.title}</p>
         </div>
-        <span className="shrink-0 rounded-full border border-rose/10 bg-rose-surface px-2 py-1 text-[10px] font-semibold uppercase text-rose/70" translate="no">
-          {track.source}
-        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="rounded-full border border-rose/10 bg-rose-surface px-2 py-1 text-[10px] font-semibold uppercase text-rose/70" translate="no">
+            QQ
+          </span>
+          <button
+            type="button"
+            onClick={onToggleLike}
+            aria-label={liked ? "取消收藏" : "收藏这首歌"}
+            title={liked ? "取消收藏" : "收藏这首歌"}
+            className="grid h-8 w-8 place-items-center rounded-full bg-white/65 text-muted/55 transition-colors hover:bg-rose-surface hover:text-rose focus-visible:ring-2 focus-visible:ring-rose/30"
+          >
+            <Heart
+              size={17}
+              fill={liked ? "currentColor" : "none"}
+              className={liked ? "text-rose" : ""}
+              aria-hidden="true"
+            />
+          </button>
+        </div>
       </div>
 
       <div className="relative mx-auto aspect-square w-full max-w-[250px] overflow-hidden rounded-[24px] border border-white/70 bg-surface-muted shadow-md">

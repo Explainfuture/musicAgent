@@ -14,7 +14,7 @@ export function uniqueTracks(tracks: PlayableTrack[]) {
   return tracks.filter((track) => {
     if (seen.has(track.id)) return false;
     seen.add(track.id);
-    return track.source === "qqmusic" || Boolean(track.audioUrl);
+    return track.source === "qqmusic";
   });
 }
 

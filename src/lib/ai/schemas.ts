@@ -15,7 +15,7 @@ export const moodProfileSchema = z.object({
 
 export const playableTrackSchema = z.object({
   id: z.string().min(1),
-  source: z.enum(["jamendo", "audius", "qqmusic", "direct"]),
+  source: z.enum(["qqmusic"]),
   title: z.string().min(1),
   artist: z.string().optional(),
   audioUrl: z.string().min(1).optional(),

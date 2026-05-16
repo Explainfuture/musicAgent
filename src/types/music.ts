@@ -1,4 +1,4 @@
-export type MusicSource = "jamendo" | "audius" | "qqmusic" | "direct";
+export type MusicSource = "qqmusic";
 
 export type TimedLyricLine = {
   time: number;

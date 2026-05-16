@@ -10,9 +10,6 @@ import {
 } from "@/lib/ai/prompts";
 import { moodProfileSchema, selectedTracksSchema } from "@/lib/ai/schemas";
 import { rankTracks } from "@/lib/music/normalize";
-import { searchAudiusTracks } from "@/lib/music/audius";
-import { fallbackTracks } from "@/lib/music/fallbackTracks";
-import { searchJamendoTracks } from "@/lib/music/jamendo";
 import { searchQQMusicTracks } from "@/lib/music/qqmusic";
 import type {
   AgentResolveRequest,
@@ -155,16 +152,9 @@ async function searchCandidates(
   const searches: Array<{
     label: string;
     run: () => Promise<PlayableTrack[]>;
-  }> = body.playbackMode === "electron"
-    ? [
-        { label: "QQ 音乐", run: () => searchQQMusicTracks(searchProfile, 15) },
-        { label: "Audius", run: () => searchAudiusTracks(moodProfile, 8) },
-        { label: "Jamendo", run: () => searchJamendoTracks(moodProfile, 8) },
-      ]
-    : [
-        { label: "Audius", run: () => searchAudiusTracks(moodProfile, 10) },
-        { label: "Jamendo", run: () => searchJamendoTracks(moodProfile, 10) },
-      ];
+  }> = [
+    { label: "QQ 音乐", run: () => searchQQMusicTracks(searchProfile, 15) },
+  ];
   const candidates: PlayableTrack[] = [];
 
   for (const source of searches) {
@@ -182,12 +172,6 @@ async function searchCandidates(
       addTrace({ step: "曲库检索", status: "failed", detail: `${source.label} 暂时没有返回可用候选。` });
     }
   }
-
-  if (candidates.length === 0 && fallbackTracks.length > 0) {
-    addTrace({ step: "曲库检索", status: "success", detail: `使用内置候选数量：${fallbackTracks.length}` });
-    return fallbackTracks;
-  }
-
   return candidates;
 }
 
@@ -237,8 +221,8 @@ async function selectTracks(input: {
 
     return recommendations;
   } catch (error) {
-    input.diagnostics.push(`LLM selection fallback: ${(error as Error).message}`);
-    input.addTrace({ step: "选歌", status: "failed", detail: "模型选歌失败，使用排序前三首兜底。" });
+    input.diagnostics.push(`LLM selection failed: ${(error as Error).message}`);
+    input.addTrace({ step: "选歌", status: "failed", detail: "模型选歌失败，使用 QQ 候选排序前三首。" });
 
     return input.candidates.slice(0, 3).map((track) => ({
       track,
@@ -310,8 +294,8 @@ export async function resolveMusicAgent(
   }
 
   if (candidates.length === 0) {
-    addTrace({ step: "排序", status: "failed", detail: "没有可播放候选，且内置 fallback 已关闭。" });
-    const error = new Error("暂时没有找到可播放的歌曲。可以换个描述、换个歌手，或者登录有播放权限的 QQ 音乐账号后再试。");
+    addTrace({ step: "排序", status: "failed", detail: "QQ 曲库暂时没有返回可播放候选。" });
+    const error = new Error("QQ 曲库暂时没搜到合适歌曲，可以换个说法再试。");
     error.name = "NoPlayableTrack";
     throw error;
   }

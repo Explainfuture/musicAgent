@@ -43,9 +43,6 @@ DEEPSEEK_API_KEY=your_deepseek_api_key
 # 可选，默认 deepseek-chat
 DEEPSEEK_MODEL=deepseek-chat
 
-# 可选：Jamendo 搜索（如果你要启用/测试 Jamendo）
-JAMENDO_CLIENT_ID=your_jamendo_client_id
-
 # 可选：腾讯云语音转写（/api/speech/transcribe）
 TENCENTCLOUD_SECRET_ID=your_secret_id
 TENCENTCLOUD_SECRET_KEY=your_secret_key

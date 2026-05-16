@@ -16,21 +16,21 @@ const moodProfile = {
 
 test("feedback memory blocks rejected tracks and promotes liked tracks", () => {
   const tracks = [
-    { id: "track_rejected", source: "direct", title: "calm rejected", audioUrl: "https://example.com/a.mp3" },
-    { id: "track_liked", source: "direct", title: "plain liked", audioUrl: "https://example.com/b.mp3" },
-    { id: "track_neutral", source: "direct", title: "calm neutral", audioUrl: "https://example.com/c.mp3" },
+    { id: "track_rejected", source: "qqmusic", title: "calm rejected" },
+    { id: "track_liked", source: "qqmusic", title: "plain liked" },
+    { id: "track_neutral", source: "qqmusic", title: "calm neutral" },
   ];
   const feedbackMemory = [
     {
       trackId: "track_rejected",
-      source: "direct",
+      source: "qqmusic",
       feedback: "not_fit",
       originalText: "calm",
       createdAt: "2026-01-01T00:00:00.000Z",
     },
     {
       trackId: "track_liked",
-      source: "direct",
+      source: "qqmusic",
       feedback: "good_fit",
       originalText: "calm",
       createdAt: "2026-01-01T00:00:01.000Z",
@@ -60,4 +60,12 @@ test("QQ lyrics route forwards the saved login cookie", async () => {
 
   assert.match(lyricsRoute, /getQQMusicCookie/);
   assert.match(lyricsRoute, /fetchQQMusicLyricData\(songmid, getQQMusicCookie\(\)\)/);
+});
+
+test("collapsed tool trace summary includes the active tool step", async () => {
+  const windowComponent = await readFile("src/components/music-agent/MusicAgentWindow.tsx", "utf8");
+
+  assert.match(windowComponent, /const activeToolTrace = useMemo/);
+  assert.match(windowComponent, /activeToolTrace\.step/);
+  assert.match(windowComponent, /activeToolTrace\.detail/);
 });
