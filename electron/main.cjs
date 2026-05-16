@@ -7,7 +7,7 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 app.commandLine.appendSwitch("enable-speech-dispatcher");
 
 const isDev = !app.isPackaged;
-const APP_URL = process.env.ELECTRON_RENDERER_URL || "http://localhost:3000";
+const APP_URL = process.env.ELECTRON_RENDERER_URL || (isDev ? "http://localhost:3000" : "https://music.explainsf.com/");
 
 const COOKIE_FILE = path.join(__dirname, "..", ".qqmusic-cookie");
 

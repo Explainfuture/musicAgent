@@ -36,6 +36,7 @@ function createTraceRecorder(emitTrace?: TraceEmitter) {
 async function chatReply(
   userText: string,
   recentConversation: Array<{ role: "user" | "agent"; content: string }>,
+  apiKey?: string,
 ) {
   try {
     const result = await callDeepSeekJson<{ reply: string }>([
@@ -44,7 +45,7 @@ async function chatReply(
         role: "user",
         content: buildChatPrompt(userText, recentConversation),
       },
-    ]);
+    ], apiKey);
     return result.reply;
   } catch {
     return "我在听。告诉我你现在的感受，或者想听什么样的歌？";
@@ -55,6 +56,7 @@ async function analyzeWithTools(
   text: string,
   diagnostics: string[],
   addTrace: TraceEmitter,
+  apiKey?: string,
 ) {
   addTrace({ step: "情绪分析", status: "running", detail: "正在理解你的情绪和音乐需求…" });
   const result = await callDeepSeekWithTools({
@@ -67,6 +69,7 @@ async function analyzeWithTools(
     ],
     tools: musicAgentTools,
     toolChoice: "auto",
+    apiKey,
   });
 
   const toolCall = result.toolCalls.find((tc) => tc.name === "analyze_and_search");
@@ -126,7 +129,7 @@ async function parseMoodFallback(
     const result = await callDeepSeekJson<unknown>([
       { role: "system", content: agentSystemPrompt },
       { role: "user", content: buildMoodPrompt(text, body.userMusicProfile) },
-    ]);
+    ], body.deepseekApiKey);
     const moodProfile = moodProfileSchema.parse(result);
     addTrace({ step: "情绪分析", status: "success", detail: "已完成情绪解析。" });
     return moodProfile;
@@ -197,7 +200,7 @@ async function selectTracks(input: {
           userMusicProfile: input.body.userMusicProfile,
         }),
       },
-    ]);
+    ], input.body.deepseekApiKey);
 
     const selection = selectedTracksSchema.parse(result);
     const tracksById = new Map(input.candidates.map((candidate) => [candidate.id, candidate]));
@@ -256,7 +259,7 @@ export async function resolveMusicAgent(
   let moodProfile: MoodProfile | null = null;
 
   try {
-    moodProfile = await analyzeWithTools(text, diagnostics, addTrace);
+    moodProfile = await analyzeWithTools(text, diagnostics, addTrace, body.deepseekApiKey);
   } catch (error) {
     diagnostics.push(`Tool calling failed: ${(error as Error).message}`);
   }
@@ -265,7 +268,7 @@ export async function resolveMusicAgent(
     const hasExplicitMusicIntent = /歌|音乐|放一首|听|换一首|推荐|播放|曲/i.test(text);
     if (!hasExplicitMusicIntent) {
       addTrace({ step: "聊天回复", status: "running", detail: "正在生成自然回复。" });
-      const reply = await chatReply(text, body.recentConversation || []);
+      const reply = await chatReply(text, body.recentConversation || [], body.deepseekApiKey);
       addTrace({ step: "聊天回复", status: "success", detail: "已生成回复。" });
       return {
         intent: "chat",

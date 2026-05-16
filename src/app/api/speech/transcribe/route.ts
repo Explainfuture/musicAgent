@@ -59,8 +59,15 @@ function signRequest(input: {
 }
 
 export async function POST(request: Request) {
-  const secretId = process.env.TENCENTCLOUD_SECRET_ID;
-  const secretKey = process.env.TENCENTCLOUD_SECRET_KEY;
+  const form = await request.formData();
+  const formSecretId = form.get("tencentSecretId");
+  const formSecretKey = form.get("tencentSecretKey");
+  const formRegion = form.get("tencentRegion");
+  const formEngine = form.get("tencentAsrEngine");
+  const secretId = (typeof formSecretId === "string" ? formSecretId.trim() : "") || process.env.TENCENTCLOUD_SECRET_ID;
+  const secretKey = (typeof formSecretKey === "string" ? formSecretKey.trim() : "") || process.env.TENCENTCLOUD_SECRET_KEY;
+  const region = (typeof formRegion === "string" ? formRegion.trim() : "") || process.env.TENCENTCLOUD_REGION || "ap-guangzhou";
+  const engine = (typeof formEngine === "string" ? formEngine.trim() : "") || process.env.TENCENT_ASR_ENGINE || "16k_zh";
 
   if (!secretId || !secretKey) {
     return NextResponse.json(
@@ -69,7 +76,6 @@ export async function POST(request: Request) {
     );
   }
 
-  const form = await request.formData();
   const file = form.get("file");
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "Missing audio file." }, { status: 400 });
@@ -83,7 +89,7 @@ export async function POST(request: Request) {
   const timestamp = Math.floor(Date.now() / 1000);
   const date = new Date(timestamp * 1000).toISOString().slice(0, 10);
   const payload = JSON.stringify({
-    EngSerViceType: process.env.TENCENT_ASR_ENGINE || "16k_zh",
+    EngSerViceType: engine,
     SourceType: 1,
     VoiceFormat: "wav",
     UsrAudioKey: `music-agent-${timestamp}-${crypto.randomUUID()}`,
@@ -100,7 +106,7 @@ export async function POST(request: Request) {
       "X-TC-Action": ACTION,
       "X-TC-Timestamp": timestamp.toString(),
       "X-TC-Version": VERSION,
-      "X-TC-Region": process.env.TENCENTCLOUD_REGION || "ap-guangzhou",
+      "X-TC-Region": region,
     },
     body: payload,
   });

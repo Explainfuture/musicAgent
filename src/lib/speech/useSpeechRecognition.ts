@@ -119,6 +119,12 @@ export function useSpeechRecognition(options?: {
   onFinalText?: (text: string) => void;
   onUnsupported?: () => void;
   onError?: (message: string) => void;
+  tencentAsr?: {
+    secretId?: string;
+    secretKey?: string;
+    region?: string;
+    engine?: string;
+  };
 }) {
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const optionsRef = useRef(options);
@@ -225,7 +231,12 @@ export function useSpeechRecognition(options?: {
   const transcribeRecording = useCallback(async (blob: Blob) => {
     setInterimText("正在转写语音...");
     const form = new FormData();
+    const tencentAsr = optionsRef.current?.tencentAsr;
     form.append("file", blob, "speech.wav");
+    if (tencentAsr?.secretId) form.append("tencentSecretId", tencentAsr.secretId);
+    if (tencentAsr?.secretKey) form.append("tencentSecretKey", tencentAsr.secretKey);
+    if (tencentAsr?.region) form.append("tencentRegion", tencentAsr.region);
+    if (tencentAsr?.engine) form.append("tencentAsrEngine", tencentAsr.engine);
 
     const response = await fetch("/api/speech/transcribe", {
       method: "POST",
@@ -244,6 +255,11 @@ export function useSpeechRecognition(options?: {
   const startRecorder = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia || !window.AudioContext) {
       optionsRef.current?.onUnsupported?.();
+      return;
+    }
+    const tencentAsr = optionsRef.current?.tencentAsr;
+    if (!tencentAsr?.secretId?.trim() || !tencentAsr.secretKey?.trim()) {
+      optionsRef.current?.onError?.("无腾讯云语音识别密钥，请先在设置中填写。");
       return;
     }
 

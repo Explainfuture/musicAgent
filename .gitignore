@@ -17,3 +17,8 @@ pnpm-debug.log*
 # QQ Music auth
 .qqmusic-cookie
 .qqmusic-cookie.json
+
+.vercel
+
+# Electron build artifacts
+release/

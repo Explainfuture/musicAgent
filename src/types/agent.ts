@@ -106,6 +106,7 @@ export type AgentResolveStreamEvent =
 
 export type AgentResolveRequest = {
   text: string;
+  deepseekApiKey?: string;
   playbackMode?: "electron" | "web";
   previousTrackIds?: string[];
   feedbackMemory?: FeedbackRecord[];

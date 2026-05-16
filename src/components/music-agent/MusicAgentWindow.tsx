@@ -46,6 +46,7 @@ import {
   MessageCircle,
   Music,
   SendHorizontal,
+  Settings,
   Trash2,
   X,
 } from "lucide-react";
@@ -70,6 +71,14 @@ type LyricDisplayLine = {
 type HistoryTab = "played" | "liked";
 
 const HISTORY_PAGE_SIZE = 15;
+const DEEPSEEK_API_KEY_STORAGE_KEY = "ccsongs.deepseekApiKey";
+const TENCENT_SECRET_ID_STORAGE_KEY = "ccsongs.tencentSecretId";
+const TENCENT_SECRET_KEY_STORAGE_KEY = "ccsongs.tencentSecretKey";
+const TENCENT_REGION_STORAGE_KEY = "ccsongs.tencentRegion";
+const TENCENT_ASR_ENGINE_STORAGE_KEY = "ccsongs.tencentAsrEngine";
+const QQ_MUSIC_LOGIN_URL = "https://y.qq.com/";
+const DEFAULT_TENCENT_REGION = "ap-guangzhou";
+const DEFAULT_TENCENT_ASR_ENGINE = "16k_zh";
 
 function getTotalPages(total: number) {
   return Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
@@ -127,6 +136,17 @@ export function MusicAgentWindow() {
   const [historyPageInput, setHistoryPageInput] = useState("");
   const [clearConfirm, setClearConfirm] = useState<HistoryTab | null>(null);
   const [exportingMemory, setExportingMemory] = useState(false);
+  const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
+  const [deepseekApiKey, setDeepseekApiKey] = useState("");
+  const [deepseekApiKeyInput, setDeepseekApiKeyInput] = useState("");
+  const [tencentSecretId, setTencentSecretId] = useState("");
+  const [tencentSecretKey, setTencentSecretKey] = useState("");
+  const [tencentRegion, setTencentRegion] = useState(DEFAULT_TENCENT_REGION);
+  const [tencentAsrEngine, setTencentAsrEngine] = useState(DEFAULT_TENCENT_ASR_ENGINE);
+  const [tencentSecretIdInput, setTencentSecretIdInput] = useState("");
+  const [tencentSecretKeyInput, setTencentSecretKeyInput] = useState("");
+  const [tencentRegionInput, setTencentRegionInput] = useState(DEFAULT_TENCENT_REGION);
+  const [tencentAsrEngineInput, setTencentAsrEngineInput] = useState(DEFAULT_TENCENT_ASR_ENGINE);
   const autoRetryCountRef = useRef(0);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -182,6 +202,13 @@ export function MusicAgentWindow() {
     }
     return displayedToolTrace.at(-1);
   }, [displayedToolTrace, status]);
+  const activeRawToolTrace = useMemo(() => {
+    if (status === "thinking" || status === "searching") {
+      return toolTrace.find((item) => item.status === "running");
+    }
+    return toolTrace.at(-1);
+  }, [status, toolTrace]);
+  const activeToolRunning = activeRawToolTrace?.status === "running";
   const activeToolDetail = activeToolTrace?.detail;
 
 
@@ -199,6 +226,24 @@ export function MusicAgentWindow() {
   }, []);
 
   useEffect(() => {
+    const savedKey = window.localStorage.getItem(DEEPSEEK_API_KEY_STORAGE_KEY) || "";
+    const savedTencentSecretId = window.localStorage.getItem(TENCENT_SECRET_ID_STORAGE_KEY) || "";
+    const savedTencentSecretKey = window.localStorage.getItem(TENCENT_SECRET_KEY_STORAGE_KEY) || "";
+    const savedTencentRegion = window.localStorage.getItem(TENCENT_REGION_STORAGE_KEY) || DEFAULT_TENCENT_REGION;
+    const savedTencentAsrEngine = window.localStorage.getItem(TENCENT_ASR_ENGINE_STORAGE_KEY) || DEFAULT_TENCENT_ASR_ENGINE;
+    setDeepseekApiKey(savedKey);
+    setDeepseekApiKeyInput(savedKey);
+    setTencentSecretId(savedTencentSecretId);
+    setTencentSecretKey(savedTencentSecretKey);
+    setTencentRegion(savedTencentRegion);
+    setTencentAsrEngine(savedTencentAsrEngine);
+    setTencentSecretIdInput(savedTencentSecretId);
+    setTencentSecretKeyInput(savedTencentSecretKey);
+    setTencentRegionInput(savedTencentRegion);
+    setTencentAsrEngineInput(savedTencentAsrEngine);
+  }, []);
+
+  useEffect(() => {
     if (!clearConfirm) return;
     const timer = window.setTimeout(() => setClearConfirm(null), 3000);
     return () => window.clearTimeout(timer);
@@ -208,7 +253,11 @@ export function MusicAgentWindow() {
     setHistoryPage((page) => Math.min(page, historyTotalPages));
   }, [historyTotalPages]);
   const handleQQLogin = async () => {
-    if (!window.musicAgentShell?.isElectron) return;
+    if (!window.musicAgentShell?.isElectron) {
+      window.open(QQ_MUSIC_LOGIN_URL, "_blank", "noopener,noreferrer");
+      setNotice("已打开 QQ 音乐网页。浏览器版无法自动保存登录，请使用桌面客户端完成 QQ 登录。");
+      return;
+    }
     setQqLoggingIn(true);
     const r = await window.musicAgentShell.loginQQMusic();
     if (r.success) { setQqLoggedIn(true); setNotice("QQ 音乐登录成功！"); }
@@ -386,6 +435,7 @@ export function MusicAgentWindow() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             text: trimmed,
+            deepseekApiKey: deepseekApiKey || undefined,
             playbackMode,
             previousTrackIds: allPrevIds,
             feedbackMemory,
@@ -404,6 +454,7 @@ export function MusicAgentWindow() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               text: trimmed,
+              deepseekApiKey: deepseekApiKey || undefined,
               playbackMode,
               previousTrackIds: allPrevIds,
               feedbackMemory,
@@ -456,7 +507,7 @@ export function MusicAgentWindow() {
         setMessages((p) => [...p, { role: "system", content: msg }]);
       }
     },
-    [applyResolveResponse, prevIds, recentConv],
+    [applyResolveResponse, deepseekApiKey, prevIds, recentConv],
   );
 
   const playQueuedRecommendation = useCallback((
@@ -498,7 +549,17 @@ export function MusicAgentWindow() {
   const speech = useSpeechRecognition({
     onFinalText: (t) => { setInputText(t); setStatus("transcribing"); setTimeout(() => setStatus("idle"), 1500); },
     onUnsupported: () => setNotice("当前环境不支持语音识别。"),
-    onError: (m) => { setStatus("error"); setNotice(m); },
+    onError: (m) => {
+      setStatus("error");
+      setNotice(m);
+      if (m.includes("腾讯云语音识别密钥")) setSettingsPanelOpen(true);
+    },
+    tencentAsr: {
+      secretId: tencentSecretId,
+      secretKey: tencentSecretKey,
+      region: tencentRegion,
+      engine: tencentAsrEngine,
+    },
   });
 
   // ── Handlers ──────────────────────────────────────────
@@ -506,6 +567,12 @@ export function MusicAgentWindow() {
   const handleSubmit = () => {
     const t = inputText.trim();
     if (!t) return;
+    if (!deepseekApiKey.trim()) {
+      setNotice("无 API Key，请先设置。");
+      setSettingsPanelOpen(true);
+      setDeepseekApiKeyInput("");
+      return;
+    }
     autoRetryCountRef.current = 0;
     setPreviousRecommendations([]);
     setRecommendationQueue([]);
@@ -647,12 +714,69 @@ export function MusicAgentWindow() {
   }, [currentTrackLiked, lastSubmitted, moodProfile, playbackDuration, playbackTime, track]);
 
   const openHistoryPanel = useCallback(() => {
+    setSettingsPanelOpen(false);
     setHistoryPanelOpen(true);
     setHistoryTab("played");
     setHistoryPage(1);
     setHistoryPageInput("");
     setClearConfirm(null);
   }, []);
+
+  const openSettingsPanel = useCallback(() => {
+    setHistoryPanelOpen(false);
+    setDeepseekApiKeyInput(deepseekApiKey);
+    setTencentSecretIdInput(tencentSecretId);
+    setTencentSecretKeyInput(tencentSecretKey);
+    setTencentRegionInput(tencentRegion || DEFAULT_TENCENT_REGION);
+    setTencentAsrEngineInput(tencentAsrEngine || DEFAULT_TENCENT_ASR_ENGINE);
+    setSettingsPanelOpen(true);
+  }, [deepseekApiKey, tencentAsrEngine, tencentRegion, tencentSecretId, tencentSecretKey]);
+
+  const closeSettingsPanel = useCallback(() => {
+    setSettingsPanelOpen(false);
+    setDeepseekApiKeyInput(deepseekApiKey);
+    setTencentSecretIdInput(tencentSecretId);
+    setTencentSecretKeyInput(tencentSecretKey);
+    setTencentRegionInput(tencentRegion || DEFAULT_TENCENT_REGION);
+    setTencentAsrEngineInput(tencentAsrEngine || DEFAULT_TENCENT_ASR_ENGINE);
+  }, [deepseekApiKey, tencentAsrEngine, tencentRegion, tencentSecretId, tencentSecretKey]);
+
+  const saveDeepseekApiKey = useCallback(() => {
+    const nextKey = deepseekApiKeyInput.trim();
+    const nextTencentSecretId = tencentSecretIdInput.trim();
+    const nextTencentSecretKey = tencentSecretKeyInput.trim();
+    const nextTencentRegion = tencentRegionInput.trim() || DEFAULT_TENCENT_REGION;
+    const nextTencentAsrEngine = tencentAsrEngineInput.trim() || DEFAULT_TENCENT_ASR_ENGINE;
+    if (nextKey) {
+      window.localStorage.setItem(DEEPSEEK_API_KEY_STORAGE_KEY, nextKey);
+    } else {
+      window.localStorage.removeItem(DEEPSEEK_API_KEY_STORAGE_KEY);
+    }
+    if (nextTencentSecretId) {
+      window.localStorage.setItem(TENCENT_SECRET_ID_STORAGE_KEY, nextTencentSecretId);
+    } else {
+      window.localStorage.removeItem(TENCENT_SECRET_ID_STORAGE_KEY);
+    }
+    if (nextTencentSecretKey) {
+      window.localStorage.setItem(TENCENT_SECRET_KEY_STORAGE_KEY, nextTencentSecretKey);
+    } else {
+      window.localStorage.removeItem(TENCENT_SECRET_KEY_STORAGE_KEY);
+    }
+    window.localStorage.setItem(TENCENT_REGION_STORAGE_KEY, nextTencentRegion);
+    window.localStorage.setItem(TENCENT_ASR_ENGINE_STORAGE_KEY, nextTencentAsrEngine);
+    setDeepseekApiKey(nextKey);
+    setDeepseekApiKeyInput(nextKey);
+    setTencentSecretId(nextTencentSecretId);
+    setTencentSecretKey(nextTencentSecretKey);
+    setTencentRegion(nextTencentRegion);
+    setTencentAsrEngine(nextTencentAsrEngine);
+    setTencentSecretIdInput(nextTencentSecretId);
+    setTencentSecretKeyInput(nextTencentSecretKey);
+    setTencentRegionInput(nextTencentRegion);
+    setTencentAsrEngineInput(nextTencentAsrEngine);
+    setSettingsPanelOpen(false);
+    setNotice("设置已保存。");
+  }, [deepseekApiKeyInput, tencentAsrEngineInput, tencentRegionInput, tencentSecretIdInput, tencentSecretKeyInput]);
 
   const closeHistoryPanel = useCallback(() => {
     setHistoryPanelOpen(false);
@@ -991,6 +1115,15 @@ export function MusicAgentWindow() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                onClick={openSettingsPanel}
+                className="grid h-8 w-8 cursor-pointer place-items-center rounded-full bg-white/65 text-muted/70 transition-colors hover:bg-rose-surface hover:text-rose focus-visible:ring-2 focus-visible:ring-rose/30"
+                aria-label="设置"
+                title="设置"
+              >
+                <Settings size={14} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
                 onClick={handleExportMemory}
                 disabled={exportingMemory}
                 className="flex h-8 cursor-pointer items-center gap-1.5 rounded-full bg-white/65 px-3 text-[11px] font-medium text-muted/70 transition-colors hover:bg-rose-surface hover:text-rose disabled:cursor-default disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-rose/30"
@@ -1007,6 +1140,132 @@ export function MusicAgentWindow() {
           </div>
 
           <AnimatePresence initial={false}>
+            {settingsPanelOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 12 }}
+                transition={{ duration: 0.18 }}
+                className="absolute inset-x-4 top-16 bottom-28 z-20 flex flex-col rounded-[24px] border border-white/75 bg-white/90 p-4 shadow-xl backdrop-blur-xl"
+              >
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Settings size={16} className="shrink-0 text-rose/70" aria-hidden="true" />
+                    <h3 className="truncate text-sm font-semibold text-foreground/80">设置</h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeSettingsPanel}
+                    aria-label="关闭设置"
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-muted/65 transition-colors hover:bg-rose-surface hover:text-rose focus-visible:ring-2 focus-visible:ring-rose/30"
+                  >
+                    <X size={16} aria-hidden="true" />
+                  </button>
+                </div>
+
+                <div className="no-scrollbar flex min-h-0 flex-1 flex-col overflow-y-auto rounded-2xl border border-white/70 bg-white/60 p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-foreground/80">DeepSeek API Key</p>
+                      <p className="mt-1 text-[11px] text-muted/60">
+                        {deepseekApiKey ? "已配置" : "未配置"}
+                      </p>
+                    </div>
+                    <span className={cn(
+                      "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium",
+                      deepseekApiKey ? "bg-success/10 text-success/75" : "bg-rose-surface text-rose/70",
+                    )}>
+                      {deepseekApiKey ? "已保存" : "待填写"}
+                    </span>
+                  </div>
+
+                  <input
+                    value={deepseekApiKeyInput}
+                    onChange={(event) => setDeepseekApiKeyInput(event.target.value)}
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="sk-..."
+                    className="h-11 w-full rounded-2xl border border-border/45 bg-white/75 px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/35 focus:border-rose/30 focus:bg-white focus-visible:ring-2 focus-visible:ring-rose/20"
+                  />
+
+                  <div className="mt-5 border-t border-border/30 pt-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-foreground/80">腾讯云语音识别</p>
+                        <p className="mt-1 text-[11px] text-muted/60">
+                          {tencentSecretId && tencentSecretKey ? "已配置" : "未配置"}
+                        </p>
+                      </div>
+                      <span className={cn(
+                        "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium",
+                        tencentSecretId && tencentSecretKey ? "bg-success/10 text-success/75" : "bg-rose-surface text-rose/70",
+                      )}>
+                        {tencentSecretId && tencentSecretKey ? "已保存" : "待填写"}
+                      </span>
+                    </div>
+
+                    <div className="grid gap-2">
+                      <input
+                        value={tencentSecretIdInput}
+                        onChange={(event) => setTencentSecretIdInput(event.target.value)}
+                        type="password"
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="SecretId"
+                        className="h-10 w-full rounded-2xl border border-border/45 bg-white/75 px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/35 focus:border-rose/30 focus:bg-white focus-visible:ring-2 focus-visible:ring-rose/20"
+                      />
+                      <input
+                        value={tencentSecretKeyInput}
+                        onChange={(event) => setTencentSecretKeyInput(event.target.value)}
+                        type="password"
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="SecretKey"
+                        className="h-10 w-full rounded-2xl border border-border/45 bg-white/75 px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/35 focus:border-rose/30 focus:bg-white focus-visible:ring-2 focus-visible:ring-rose/20"
+                      />
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          value={tencentRegionInput}
+                          onChange={(event) => setTencentRegionInput(event.target.value)}
+                          autoComplete="off"
+                          spellCheck={false}
+                          placeholder="ap-guangzhou"
+                          className="h-10 w-full rounded-2xl border border-border/45 bg-white/75 px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/35 focus:border-rose/30 focus:bg-white focus-visible:ring-2 focus-visible:ring-rose/20"
+                        />
+                        <input
+                          value={tencentAsrEngineInput}
+                          onChange={(event) => setTencentAsrEngineInput(event.target.value)}
+                          autoComplete="off"
+                          spellCheck={false}
+                          placeholder="16k_zh"
+                          className="h-10 w-full rounded-2xl border border-border/45 bg-white/75 px-3 text-sm text-foreground outline-none transition-colors placeholder:text-muted/35 focus:border-rose/30 focus:bg-white focus-visible:ring-2 focus-visible:ring-rose/20"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-auto flex items-center justify-end gap-2 border-t border-border/30 pt-3">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setDeepseekApiKeyInput("");
+                        setTencentSecretIdInput("");
+                        setTencentSecretKeyInput("");
+                      }}
+                    >
+                      清空
+                    </Button>
+                    <Button type="button" size="sm" className="bg-foreground text-white hover:bg-foreground/90" onClick={saveDeepseekApiKey}>
+                      保存
+                    </Button>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
             {historyPanelOpen && (
               <motion.div
                 initial={{ opacity: 0, y: 12 }}
@@ -1261,15 +1520,23 @@ export function MusicAgentWindow() {
                   </button>
 
                   {activeToolTrace && (
-                    <div className="silver-flow-card mt-2 rounded-2xl px-3 py-2 text-xs leading-5 text-foreground/70" aria-live="polite">
-                      <span className="font-medium text-foreground/78">{activeToolTrace.step}</span>
-                      <span className="mx-1 text-muted/45">/</span>
-                      <span className={cn(
-                        activeToolTrace.status === "failed" ? "text-amber-700/80" : activeToolTrace.status === "running" ? "text-rose/75" : "text-success/80",
-                      )}>
-                        {activeToolTrace.status === "running" ? "执行中" : activeToolTrace.status === "success" ? "完成" : "失败"}
-                      </span>
-                      <span className="ml-1 text-muted/75">{activeToolTrace.detail}</span>
+                    <div className="mt-2 rounded-2xl bg-white/60 px-3 py-2 text-xs leading-5 text-foreground/70" aria-live="polite">
+                      {activeToolRunning ? (
+                        <span className="silver-flow-text">
+                          {`${activeToolTrace.step} / 执行中 ${activeToolTrace.detail}`}
+                        </span>
+                      ) : (
+                        <>
+                          <span className="font-medium text-foreground/78">{activeToolTrace.step}</span>
+                          <span className="mx-1 text-muted/45">/</span>
+                          <span className={cn(
+                            activeToolTrace.status === "failed" ? "text-amber-700/80" : "text-success/80",
+                          )}>
+                            {activeToolTrace.status === "success" ? "完成" : "失败"}
+                          </span>
+                          <span className="ml-1 text-muted/75">{activeToolTrace.detail}</span>
+                        </>
+                      )}
                     </div>
                   )}
 
@@ -1344,7 +1611,15 @@ export function MusicAgentWindow() {
                 <MicButton
                   isListening={speech.isListening}
                   isSupported={speech.isSupported}
-                  onStart={() => { setStatus("listening"); speech.start(); }}
+                  onStart={() => {
+                    if (window.musicAgentShell?.isElectron && (!tencentSecretId.trim() || !tencentSecretKey.trim())) {
+                      setNotice("无腾讯云语音识别密钥，请先在设置中填写。");
+                      setSettingsPanelOpen(true);
+                      return;
+                    }
+                    setStatus("listening");
+                    speech.start();
+                  }}
                   onStop={speech.stop}
                 />
                 <Button

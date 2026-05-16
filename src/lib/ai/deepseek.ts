@@ -32,17 +32,22 @@ type ToolDefinition = {
   };
 };
 
+function getDeepSeekApiKey(apiKey?: string) {
+  const resolvedKey = apiKey?.trim() || process.env.DEEPSEEK_API_KEY;
+  if (!resolvedKey) throw new Error("DEEPSEEK_API_KEY is not configured.");
+  return resolvedKey;
+}
+
 // ── JSON mode (existing) ──────────────────────────────
 
-export async function callDeepSeekJson<T>(messages: DeepSeekMessage[]): Promise<T> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey) throw new Error("DEEPSEEK_API_KEY is not configured.");
+export async function callDeepSeekJson<T>(messages: DeepSeekMessage[], apiKey?: string): Promise<T> {
+  const resolvedKey = getDeepSeekApiKey(apiKey);
 
   const response = await fetch("https://api.deepseek.com/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${resolvedKey}`,
     },
     body: JSON.stringify({
       model: process.env.DEEPSEEK_MODEL || "deepseek-chat",
@@ -69,18 +74,18 @@ export async function callDeepSeekWithTools(input: {
   messages: DeepSeekMessage[];
   tools: ToolDefinition[];
   toolChoice?: "auto" | "required" | { type: "function"; function: { name: string } };
+  apiKey?: string;
 }): Promise<{
   toolCalls: Array<{ name: string; arguments: Record<string, unknown> }>;
   content: string | null;
 }> {
-  const apiKey = process.env.DEEPSEEK_API_KEY;
-  if (!apiKey) throw new Error("DEEPSEEK_API_KEY is not configured.");
+  const resolvedKey = getDeepSeekApiKey(input.apiKey);
 
   const response = await fetch("https://api.deepseek.com/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${resolvedKey}`,
     },
     body: JSON.stringify({
       model: process.env.DEEPSEEK_MODEL || "deepseek-chat",
