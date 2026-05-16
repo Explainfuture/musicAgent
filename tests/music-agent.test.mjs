@@ -55,6 +55,62 @@ test("Electron QQ Music IPC does not return raw cookies to the renderer", async 
   assert.equal(mainProcess.includes("cookie: cookie ||"), false);
 });
 
+test("Electron QQ Music login window is not closed by page load failures", async () => {
+  const loginProcess = await readFile("electron/qqmusicLogin.cjs", "utf8");
+
+  assert.match(loginProcess, /did-fail-load/);
+  assert.match(loginProcess, /loadURL\(QQ_MUSIC_URL, \{ userAgent: DESKTOP_USER_AGENT \}\)\.catch\(\(\) => \{\}\)/);
+  assert.doesNotMatch(loginProcess, /loadURL\(QQ_MUSIC_URL[\s\S]*catch\(\(\) => finish\(null\)\)/);
+});
+
+test("Packaged QQ Music cookie is saved under Electron userData", async () => {
+  const mainProcess = await readFile("electron/main.cjs", "utf8");
+
+  assert.match(mainProcess, /app\.getPath\("userData"\)/);
+  assert.match(mainProcess, /qqmusic-cookie\.json/);
+  assert.match(mainProcess, /QQMUSIC_COOKIE_FILE: getCookieFile\(\)/);
+  assert.doesNotMatch(mainProcess, /const COOKIE_FILE = path\.join\(__dirname, "\.\.", "\.qqmusic-cookie"\)/);
+});
+
+test("QQ Music server APIs can read the Electron cookie file path", async () => {
+  const auth = await readFile("src/lib/music/qqmusicAuth.ts", "utf8");
+
+  assert.match(auth, /process\.env\.QQMUSIC_COOKIE_FILE/);
+  assert.match(auth, /dirname\(filePath\)/);
+});
+
+test("Packaged Electron app starts a local Next renderer instead of the remote site", async () => {
+  const mainProcess = await readFile("electron/main.cjs", "utf8");
+
+  assert.match(mainProcess, /startPackagedRendererServer/);
+  assert.match(mainProcess, /ELECTRON_RUN_AS_NODE/);
+  assert.match(mainProcess, /127\.0\.0\.1/);
+  assert.doesNotMatch(mainProcess, /music\.explainsf\.com/);
+});
+
+test("Electron windows use the packaged application icon", async () => {
+  const mainProcess = await readFile("electron/main.cjs", "utf8");
+  const loginProcess = await readFile("electron/qqmusicLogin.cjs", "utf8");
+
+  assert.match(mainProcess, /icon: getWindowIcon\(\)/);
+  assert.match(loginProcess, /icon: getWindowIcon\(\)/);
+});
+
+test("Windows packaging patches the executable icon without winCodeSign extraction", async () => {
+  const pkg = JSON.parse(await readFile("package.json", "utf8"));
+  const afterPack = await readFile("scripts/after-pack.cjs", "utf8");
+
+  assert.match(pkg.scripts["dist:win"], /npm run build/);
+  assert.match(pkg.scripts["dist:win"], /prepare-standalone/);
+  assert.equal(pkg.build.afterPack, "scripts/after-pack.cjs");
+  assert.equal(pkg.build.win.icon, "build/icon.ico");
+  assert.equal(pkg.build.win.signAndEditExecutable, false);
+  assert.ok(pkg.build.files.includes(".next/standalone/**/*"));
+  assert.ok(pkg.build.asarUnpack.includes(".next/standalone/**/*"));
+  assert.match(afterPack, /rcedit\.exe/);
+  assert.match(afterPack, /--set-icon/);
+});
+
 test("QQ lyrics route forwards the saved login cookie", async () => {
   const lyricsRoute = await readFile("src/app/api/music/lyrics/route.ts", "utf8");
 

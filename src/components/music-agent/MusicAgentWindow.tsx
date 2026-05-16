@@ -299,7 +299,7 @@ export function MusicAgentWindow() {
     setQqLoggingIn(true);
     const r = await window.musicAgentShell.loginQQMusic();
     if (r.success) { setQqLoggedIn(true); setNotice("QQ 音乐登录成功！"); }
-    else setNotice("登录已取消。");
+    else setNotice(r.error ? `QQ 音乐登录失败：${r.error}` : "登录已取消。");
     setQqLoggingIn(false);
   };
 

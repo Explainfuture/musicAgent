@@ -1,4 +1,7 @@
 const { app, BrowserWindow, session, shell, ipcMain, net, systemPreferences } = require("electron");
+const { spawn } = require("node:child_process");
+const http = require("node:http");
+const os = require("node:os");
 const path = require("node:path");
 const fs = require("node:fs");
 const { loginQQMusic } = require("./qqmusicLogin.cjs");
@@ -7,22 +10,126 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 app.commandLine.appendSwitch("enable-speech-dispatcher");
 
 const isDev = !app.isPackaged;
-const APP_URL = process.env.ELECTRON_RENDERER_URL || (isDev ? "http://localhost:3000" : "https://music.explainsf.com/");
+const DEV_APP_URL = process.env.ELECTRON_RENDERER_URL || "http://localhost:3000";
+let nextServerProcess = null;
 
-const COOKIE_FILE = path.join(__dirname, "..", ".qqmusic-cookie");
+const LEGACY_COOKIE_FILE = path.join(__dirname, "..", ".qqmusic-cookie");
+
+function getCookieFile() {
+  return path.join(app.getPath("userData"), "qqmusic-cookie.json");
+}
+
+function getWindowIcon() {
+  const iconPath = path.join(app.getAppPath(), "build", "icon.ico");
+  return fs.existsSync(iconPath) ? iconPath : undefined;
+}
+
+function findFreePort() {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : null;
+      server.close(() => {
+        if (port) resolve(port);
+        else reject(new Error("Could not allocate a local renderer port."));
+      });
+    });
+  });
+}
+
+function waitForHttp(url, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
+
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      const request = http.get(url, (response) => {
+        response.resume();
+        if ((response.statusCode || 500) < 500) {
+          resolve();
+          return;
+        }
+        retry();
+      });
+      request.on("error", retry);
+      request.setTimeout(1000, () => {
+        request.destroy();
+        retry();
+      });
+    };
+
+    const retry = () => {
+      if (Date.now() > deadline) {
+        reject(new Error(`Timed out waiting for local renderer at ${url}`));
+        return;
+      }
+      setTimeout(check, 250);
+    };
+
+    check();
+  });
+}
+
+function getPackagedStandaloneDir() {
+  const unpackedDir = path.join(process.resourcesPath, "app.asar.unpacked", ".next", "standalone");
+  if (fs.existsSync(path.join(unpackedDir, "server.js"))) return unpackedDir;
+
+  return path.join(app.getAppPath(), ".next", "standalone");
+}
+
+async function startPackagedRendererServer() {
+  const port = await findFreePort();
+  const standaloneDir = getPackagedStandaloneDir();
+  const serverEntry = path.join(standaloneDir, "server.js");
+
+  if (!fs.existsSync(serverEntry)) {
+    throw new Error(`Missing packaged Next server: ${serverEntry}`);
+  }
+
+  nextServerProcess = spawn(process.execPath, [serverEntry], {
+    cwd: standaloneDir,
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: "1",
+      HOSTNAME: "127.0.0.1",
+      PORT: String(port),
+      NODE_ENV: "production",
+      QQMUSIC_COOKIE_FILE: getCookieFile(),
+      USERPROFILE: os.homedir(),
+    },
+    stdio: "ignore",
+    windowsHide: true,
+  });
+
+  nextServerProcess.once("exit", (code, signal) => {
+    nextServerProcess = null;
+    if (!app.isQuitting) {
+      console.error(`Local renderer server exited: ${code ?? signal}`);
+    }
+  });
+
+  const url = `http://127.0.0.1:${port}`;
+  await waitForHttp(url);
+  return url;
+}
 
 function readSavedCookie() {
   try {
-    if (!fs.existsSync(COOKIE_FILE)) return null;
-    const raw = fs.readFileSync(COOKIE_FILE, "utf-8").trim();
+    const cookieFile = getCookieFile();
+    const fallbackFile = fs.existsSync(cookieFile) ? cookieFile : LEGACY_COOKIE_FILE;
+    if (!fs.existsSync(fallbackFile)) return null;
+    const raw = fs.readFileSync(fallbackFile, "utf-8").trim();
     if (!raw) return null;
     return JSON.parse(raw).cookie || null;
   } catch { return null; }
 }
 
 function saveCookie(cookie) {
+  const cookieFile = getCookieFile();
+  fs.mkdirSync(path.dirname(cookieFile), { recursive: true });
   fs.writeFileSync(
-    COOKIE_FILE,
+    cookieFile,
     JSON.stringify({ cookie, savedAt: new Date().toISOString() }, null, 2),
     "utf-8",
   );
@@ -30,11 +137,13 @@ function saveCookie(cookie) {
 
 function clearSavedCookie() {
   try {
-    if (fs.existsSync(COOKIE_FILE)) fs.unlinkSync(COOKIE_FILE);
+    const cookieFile = getCookieFile();
+    if (fs.existsSync(cookieFile)) fs.unlinkSync(cookieFile);
+    if (fs.existsSync(LEGACY_COOKIE_FILE)) fs.unlinkSync(LEGACY_COOKIE_FILE);
   } catch {}
 }
 
-function createWindow() {
+function createWindow(appUrl) {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(["media", "microphone"].includes(permission));
   });
@@ -49,6 +158,7 @@ function createWindow() {
     minHeight: 720,
     backgroundColor: "#faf8f7",
     title: "ccSongs",
+    icon: getWindowIcon(),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -64,7 +174,7 @@ function createWindow() {
     return { action: "deny" };
   });
 
-  void mainWindow.loadURL(APP_URL);
+  void mainWindow.loadURL(appUrl);
 
   if (isDev) {
     mainWindow.webContents.openDevTools({ mode: "detach" });
@@ -118,13 +228,17 @@ function setupIPC() {
 
   // QQ Music login flow
   ipcMain.handle("qqmusic:login", async () => {
-    const win = BrowserWindow.getFocusedWindow();
-    const cookie = await loginQQMusic(win);
-    if (cookie) {
-      saveCookie(cookie);
-      return { success: true };
+    try {
+      const win = BrowserWindow.getFocusedWindow();
+      const cookie = await loginQQMusic(win);
+      if (cookie) {
+        saveCookie(cookie);
+        return { success: true };
+      }
+      return { success: false };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
-    return { success: false };
   });
 
   // Check if cookie is saved
@@ -204,13 +318,22 @@ function setupIPC() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   setupIPC();
-  createWindow();
+  const appUrl = isDev ? DEV_APP_URL : await startPackagedRendererServer();
+  createWindow(appUrl);
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) createWindow(appUrl);
   });
+});
+
+app.on("before-quit", () => {
+  app.isQuitting = true;
+  if (nextServerProcess) {
+    nextServerProcess.kill();
+    nextServerProcess = null;
+  }
 });
 
 app.on("window-all-closed", () => {

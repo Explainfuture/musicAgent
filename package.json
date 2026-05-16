@@ -9,7 +9,7 @@
     "electron:dev": "npm run electron",
     "electron:start": "concurrently -k \"next start\" \"wait-on http://localhost:3000 && electron .\"",
     "icon": "node scripts/make-icon.mjs",
-    "dist:win": "npm run icon && electron-builder --win --x64",
+    "dist:win": "npm run build && node scripts/prepare-standalone.cjs && npm run icon && electron-builder --win --x64",
     "build": "next build",
     "start": "next start",
     "lint": "tsc --noEmit",
@@ -44,13 +44,18 @@
   "build": {
     "appId": "com.explainsf.ccsongs",
     "productName": "ccSongs",
+    "afterPack": "scripts/after-pack.cjs",
     "directories": {
       "output": "release"
     },
     "files": [
       "electron/**/*",
+      ".next/standalone/**/*",
       "build/icon.ico",
       "package.json"
+    ],
+    "asarUnpack": [
+      ".next/standalone/**/*"
     ],
     "win": {
       "icon": "build/icon.ico",

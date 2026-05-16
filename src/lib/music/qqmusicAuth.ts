@@ -13,20 +13,15 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname } from "node:path";
 
 const COOKIE_FILE = ".qqmusic-cookie";
 
-function getProjectRoot(): string {
-  // In Next.js API routes, process.cwd() is the project root
-  return process.cwd();
-}
-
 function loadCookieFromFile(): string | null {
   try {
-    const filePath = join(getProjectRoot(), COOKIE_FILE);
-    if (!existsSync(filePath)) return null;
-    const content = readFileSync(filePath, "utf-8").trim();
+    const filePath = process.env.QQMUSIC_COOKIE_FILE || COOKIE_FILE;
+    if (!existsSync(/*turbopackIgnore: true*/ filePath)) return null;
+    const content = readFileSync(/*turbopackIgnore: true*/ filePath, "utf-8").trim();
     if (!content) return null;
 
     const parsed = JSON.parse(content) as { cookie: string; savedAt: string };
@@ -37,9 +32,10 @@ function loadCookieFromFile(): string | null {
 }
 
 function saveCookieToFile(cookie: string): void {
-  const filePath = join(getProjectRoot(), COOKIE_FILE);
+  const filePath = process.env.QQMUSIC_COOKIE_FILE || COOKIE_FILE;
+  mkdirSync(/*turbopackIgnore: true*/ dirname(filePath), { recursive: true });
   writeFileSync(
-    filePath,
+    /*turbopackIgnore: true*/ filePath,
     JSON.stringify({ cookie, savedAt: new Date().toISOString() }, null, 2),
     "utf-8",
   );
