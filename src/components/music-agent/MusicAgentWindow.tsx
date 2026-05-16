@@ -79,6 +79,9 @@ const TENCENT_ASR_ENGINE_STORAGE_KEY = "ccsongs.tencentAsrEngine";
 const QQ_MUSIC_LOGIN_URL = "https://y.qq.com/";
 const DEFAULT_TENCENT_REGION = "ap-guangzhou";
 const DEFAULT_TENCENT_ASR_ENGINE = "16k_zh";
+const PREFETCH_QUEUE_THRESHOLD = 2;
+const PREFETCH_PREVIEW_LIMIT = 5;
+const HISTORY_EXCLUSION_LIMIT = 30;
 
 function getTotalPages(total: number) {
   return Math.max(1, Math.ceil(total / HISTORY_PAGE_SIZE));
@@ -106,6 +109,14 @@ function getCurrentRecommendation(data: AgentResolveResponse | null): TrackRecom
   };
 }
 
+function getRecommendationIds(recommendations: TrackRecommendation[]) {
+  return recommendations.map((recommendation) => recommendation.track.id);
+}
+
+function getPlayedTrackIds(history: PlayedTrackEntry[], limit = HISTORY_EXCLUSION_LIMIT) {
+  return history.slice(0, limit).map((entry) => entry.track.id);
+}
+
 // ── Component ───────────────────────────────────────────
 
 export function MusicAgentWindow() {
@@ -127,6 +138,9 @@ export function MusicAgentWindow() {
   const [likedTracks, setLikedTracks] = useState<LikedTrackEntry[]>([]);
   const [previousRecommendations, setPreviousRecommendations] = useState<TrackRecommendation[]>([]);
   const [recommendationQueue, setRecommendationQueue] = useState<TrackRecommendation[]>([]);
+  const [prefetchedResponse, setPrefetchedResponse] = useState<AgentResolveResponse | null>(null);
+  const [prefetchingQueue, setPrefetchingQueue] = useState(false);
+  const [waitingForPrefetch, setWaitingForPrefetch] = useState(false);
   const [toolTraceExpanded, setToolTraceExpanded] = useState(false);
   const [lyricsLoadingTrackId, setLyricsLoadingTrackId] = useState<string | null>(null);
   const [expandedExplanations, setExpandedExplanations] = useState<Record<string, boolean>>({});
@@ -148,6 +162,10 @@ export function MusicAgentWindow() {
   const [tencentRegionInput, setTencentRegionInput] = useState(DEFAULT_TENCENT_REGION);
   const [tencentAsrEngineInput, setTencentAsrEngineInput] = useState(DEFAULT_TENCENT_ASR_ENGINE);
   const autoRetryCountRef = useRef(0);
+  const requestGenerationRef = useRef(0);
+  const prefetchKeyRef = useRef<string | null>(null);
+  const waitingForPrefetchRef = useRef(false);
+  const resolveAbortControllerRef = useRef<AbortController | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lyricLineRefs = useRef<Array<RefObject<HTMLParagraphElement | null>>>([]);
@@ -210,6 +228,17 @@ export function MusicAgentWindow() {
   }, [status, toolTrace]);
   const activeToolRunning = activeRawToolTrace?.status === "running";
   const activeToolDetail = activeToolTrace?.detail;
+  const isResolving = status === "thinking" || status === "searching";
+  const prefetchedCandidates = useMemo(() => {
+    const seen = new Set<string>();
+    return [...recommendationQueue, ...(prefetchedResponse ? getRecommendations(prefetchedResponse) : [])]
+      .filter((recommendation) => {
+        if (seen.has(recommendation.track.id)) return false;
+        seen.add(recommendation.track.id);
+        return true;
+      })
+      .slice(0, PREFETCH_PREVIEW_LIMIT);
+  }, [prefetchedResponse, recommendationQueue]);
 
 
   // QQ Music auth check
@@ -252,6 +281,15 @@ export function MusicAgentWindow() {
   useEffect(() => {
     setHistoryPage((page) => Math.min(page, historyTotalPages));
   }, [historyTotalPages]);
+
+  useEffect(() => {
+    waitingForPrefetchRef.current = waitingForPrefetch;
+  }, [waitingForPrefetch]);
+
+  useEffect(() => {
+    return () => resolveAbortControllerRef.current?.abort();
+  }, []);
+
   const handleQQLogin = async () => {
     if (!window.musicAgentShell?.isElectron) {
       window.open(QQ_MUSIC_LOGIN_URL, "_blank", "noopener,noreferrer");
@@ -354,6 +392,9 @@ export function MusicAgentWindow() {
     recommendation: TrackRecommendation,
     intro?: string,
   ) => {
+    setToolTraceExpanded(false);
+    waitingForPrefetchRef.current = false;
+    setWaitingForPrefetch(false);
     const nextResponse: AgentResolveResponse = {
       ...data,
       track: recommendation.track,
@@ -408,12 +449,26 @@ export function MusicAgentWindow() {
     async (text: string, extraPrevIds: string[] = []) => {
       const trimmed = text.trim();
       if (!trimmed) return;
+      const generation = requestGenerationRef.current;
+      const abortController = new AbortController();
+      resolveAbortControllerRef.current?.abort();
+      resolveAbortControllerRef.current = abortController;
       setNotice("");
       setStatus("thinking");
       setToolTrace([{ step: "用户画像", status: "running", detail: "正在搜寻用户历史记录和画像 JSON…" }]);
       setLastSubmitted(trimmed);
 
-      const allPrevIds = Array.from(new Set([...prevIds, ...extraPrevIds]));
+      const queuedIds = getRecommendationIds(recommendationQueue);
+      const prefetchedIds = prefetchedResponse ? getRecommendationIds(getRecommendations(prefetchedResponse)) : [];
+      const historyIds = getPlayedTrackIds(playHistory);
+      const allPrevIds = Array.from(new Set([
+        ...prevIds,
+        ...extraPrevIds,
+        ...(track ? [track.id] : []),
+        ...queuedIds,
+        ...prefetchedIds,
+        ...historyIds,
+      ]));
       const feedbackMemory = readFeedbackMemory();
       const userMusicProfile = readUserMusicProfile();
       const playbackMode = window.musicAgentShell?.isElectron ? "electron" : "web";
@@ -433,6 +488,7 @@ export function MusicAgentWindow() {
         const res = await fetch("/api/agent/resolve/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: abortController.signal,
           body: JSON.stringify({
             text: trimmed,
             deepseekApiKey: deepseekApiKey || undefined,
@@ -452,6 +508,7 @@ export function MusicAgentWindow() {
           const fallbackRes = await fetch("/api/agent/resolve", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            signal: abortController.signal,
             body: JSON.stringify({
               text: trimmed,
               deepseekApiKey: deepseekApiKey || undefined,
@@ -469,6 +526,7 @@ export function MusicAgentWindow() {
           }
 
           const data = (await fallbackRes.json()) as AgentResolveResponse;
+          if (generation !== requestGenerationRef.current) return;
           if (data.toolTrace?.length) setToolTrace(data.toolTrace);
           applyResolveResponse(data);
           return;
@@ -491,8 +549,10 @@ export function MusicAgentWindow() {
             const event = JSON.parse(line) as AgentResolveStreamEvent;
 
             if (event.type === "trace") {
+              if (generation !== requestGenerationRef.current) return;
               setToolTrace((prev) => [...prev, event.trace]);
             } else if (event.type === "result") {
+              if (generation !== requestGenerationRef.current) return;
               applyResolveResponse(event.data);
             } else {
               throw new Error(event.error);
@@ -500,15 +560,124 @@ export function MusicAgentWindow() {
           }
         }
       } catch (err) {
+        if (generation !== requestGenerationRef.current) return;
+        if ((err as Error).name === "AbortError") return;
         setStatus("error");
         setToolTrace((p) => [...p, { step: "错误", status: "failed", detail: (err as Error).message }]);
         const msg = (err as Error).message;
         setNotice(msg);
         setMessages((p) => [...p, { role: "system", content: msg }]);
+      } finally {
+        if (resolveAbortControllerRef.current === abortController) {
+          resolveAbortControllerRef.current = null;
+        }
       }
     },
-    [applyResolveResponse, deepseekApiKey, prevIds, recentConv],
+    [applyResolveResponse, deepseekApiKey, playHistory, prefetchedResponse, prevIds, recentConv, recommendationQueue, track],
   );
+
+  const prefetchQueue = useCallback(async (extraPrevIds: string[] = []) => {
+    const trimmed = lastSubmitted.trim();
+    if (!trimmed || !deepseekApiKey.trim()) return;
+
+    const generation = requestGenerationRef.current;
+    const queuedIds = getRecommendationIds(recommendationQueue);
+    const prefetchedIds = prefetchedResponse ? getRecommendationIds(getRecommendations(prefetchedResponse)) : [];
+    const historyIds = getPlayedTrackIds(playHistory);
+    const allPrevIds = Array.from(new Set([
+      ...prevIds,
+      ...extraPrevIds,
+      ...(track ? [track.id] : []),
+      ...queuedIds,
+      ...prefetchedIds,
+      ...historyIds,
+    ]));
+    const prefetchKey = `${generation}:${allPrevIds.join("|")}`;
+    if (prefetchingQueue || prefetchedResponse || prefetchKeyRef.current === prefetchKey) return;
+
+    prefetchKeyRef.current = prefetchKey;
+    setPrefetchingQueue(true);
+    setToolTraceExpanded(false);
+    setToolTrace((prev) => [
+      ...prev,
+      { step: "续播缓存", status: "running", detail: "正在提前匹配下一组候选歌曲。" },
+    ]);
+
+    const feedbackMemory = readFeedbackMemory();
+    const userMusicProfile = readUserMusicProfile();
+    const playbackMode = window.musicAgentShell?.isElectron ? "electron" : "web";
+
+    try {
+      const res = await fetch("/api/agent/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: trimmed,
+          deepseekApiKey: deepseekApiKey || undefined,
+          playbackMode,
+          previousTrackIds: allPrevIds,
+          feedbackMemory,
+          userMusicProfile,
+          recentConversation: recentConv,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(err?.error || "续播缓存失败。");
+      }
+
+      const data = (await res.json()) as AgentResolveResponse;
+      if (generation !== requestGenerationRef.current) return;
+
+      const recommendations = getRecommendations(data);
+      if (data.intent !== "music" || recommendations.length === 0) return;
+
+      setPrefetchedResponse(data);
+      setToolTrace((prev) => [
+        ...prev,
+        { step: "歌曲搜索结果", status: "success", detail: `已完成，下一首会从这些候选里继续。` },
+      ]);
+    } catch (err) {
+      if (generation !== requestGenerationRef.current) return;
+
+      setToolTrace((prev) => [
+        ...prev,
+        { step: "续播缓存", status: "failed", detail: (err as Error).message },
+      ]);
+      if (waitingForPrefetchRef.current) {
+        setMessages((p) => [...p, { role: "agent", content: "刚才的续播缓存没接上，我重新找一组。" }]);
+        void resolveTrack(trimmed, extraPrevIds);
+      }
+    } finally {
+      if (generation === requestGenerationRef.current) {
+        setPrefetchingQueue(false);
+      }
+    }
+  }, [deepseekApiKey, lastSubmitted, playHistory, prefetchedResponse, prefetchingQueue, prevIds, recentConv, recommendationQueue, resolveTrack, track]);
+
+  const playPrefetchedResponse = useCallback((
+    intro?: (recommendation: TrackRecommendation) => string,
+    options: { pushCurrentToPrevious?: boolean } = {},
+  ) => {
+    if (!prefetchedResponse) return false;
+
+    const recommendations = getRecommendations(prefetchedResponse);
+    const [nextRecommendation, ...queuedRecommendations] = recommendations;
+    if (!nextRecommendation) return false;
+
+    const currentRecommendation = getCurrentRecommendation(response);
+    if (options.pushCurrentToPrevious !== false && currentRecommendation) {
+      setPreviousRecommendations((stack) => [...stack, currentRecommendation].slice(-20));
+    }
+    setPrefetchedResponse(null);
+    waitingForPrefetchRef.current = false;
+    setWaitingForPrefetch(false);
+    setRecommendationQueue(queuedRecommendations);
+    setStatus("playing");
+    applyTrackRecommendation(prefetchedResponse, nextRecommendation, intro?.(nextRecommendation));
+    return true;
+  }, [applyTrackRecommendation, prefetchedResponse, response]);
 
   const playQueuedRecommendation = useCallback((
     intro?: (recommendation: TrackRecommendation) => string,
@@ -526,6 +695,22 @@ export function MusicAgentWindow() {
     applyTrackRecommendation(response, nextRecommendation, intro?.(nextRecommendation));
     return true;
   }, [applyTrackRecommendation, recommendationQueue, response]);
+
+  useEffect(() => {
+    if (!track || status !== "playing" || !lastSubmitted.trim()) return;
+    if (recommendationQueue.length > PREFETCH_QUEUE_THRESHOLD) return;
+    if (prefetchedResponse || prefetchingQueue) return;
+
+    const queuedIds = getRecommendationIds(recommendationQueue);
+    void prefetchQueue([track.id, ...queuedIds]);
+  }, [lastSubmitted, prefetchedResponse, prefetchQueue, prefetchingQueue, recommendationQueue, status, track]);
+
+  useEffect(() => {
+    if (!waitingForPrefetch || !prefetchedResponse) return;
+    playPrefetchedResponse((recommendation) => (
+      `下一组接上了，先听《${recommendation.track.title}》${recommendation.track.artist ? ` — ${recommendation.track.artist}` : ""}。`
+    ), { pushCurrentToPrevious: false });
+  }, [playPrefetchedResponse, prefetchedResponse, waitingForPrefetch]);
 
   const handlePrevious = useCallback(() => {
     if (!response || previousRecommendations.length === 0) return;
@@ -564,6 +749,21 @@ export function MusicAgentWindow() {
 
   // ── Handlers ──────────────────────────────────────────
 
+  const handleAbortResolve = useCallback(() => {
+    resolveAbortControllerRef.current?.abort();
+    resolveAbortControllerRef.current = null;
+    requestGenerationRef.current += 1;
+    waitingForPrefetchRef.current = false;
+    setWaitingForPrefetch(false);
+    setPrefetchingQueue(false);
+    setStatus(track ? "paused" : "idle");
+    setToolTrace((prev) => [
+      ...prev,
+      { step: "查找终止", status: "failed", detail: "已终止本次查找。" },
+    ]);
+    setNotice("已终止本次查找。");
+  }, [track]);
+
   const handleSubmit = () => {
     const t = inputText.trim();
     if (!t) return;
@@ -574,6 +774,14 @@ export function MusicAgentWindow() {
       return;
     }
     autoRetryCountRef.current = 0;
+    resolveAbortControllerRef.current?.abort();
+    resolveAbortControllerRef.current = null;
+    requestGenerationRef.current += 1;
+    prefetchKeyRef.current = null;
+    setPrefetchedResponse(null);
+    setPrefetchingQueue(false);
+    waitingForPrefetchRef.current = false;
+    setWaitingForPrefetch(false);
     setPreviousRecommendations([]);
     setRecommendationQueue([]);
     setMessages((p) => [...p, { role: "user", content: t }]);
@@ -598,13 +806,14 @@ export function MusicAgentWindow() {
       { role: "user", content: "这首不太对，换一首吧。" },
     ]);
     if (playQueuedRecommendation()) return;
+    if (playPrefetchedResponse()) return;
     const currentRecommendation = getCurrentRecommendation(response);
     if (currentRecommendation) {
       setPreviousRecommendations((stack) => [...stack, currentRecommendation].slice(-20));
     }
     setMessages((p) => [...p, { role: "agent", content: "好的，我换个方向为你找。" }]);
     void resolveTrack(lastSubmitted, [track.id]);
-  }, [lastSubmitted, moodProfile, playQueuedRecommendation, playbackDuration, playbackTime, resolveTrack, response, track]);
+  }, [lastSubmitted, moodProfile, playPrefetchedResponse, playQueuedRecommendation, playbackDuration, playbackTime, resolveTrack, response, track]);
 
   const handleEnded = useCallback(() => {
     if (!track || !lastSubmitted) return;
@@ -619,17 +828,29 @@ export function MusicAgentWindow() {
     if (playQueuedRecommendation((recommendation) => (
       `这首听完了，接着放《${recommendation.track.title}》${recommendation.track.artist ? ` — ${recommendation.track.artist}` : ""}。`
     ))) return;
+    if (playPrefetchedResponse((recommendation) => (
+      `这组接上了，继续放《${recommendation.track.title}》${recommendation.track.artist ? ` — ${recommendation.track.artist}` : ""}。`
+    ))) return;
     const currentRecommendation = getCurrentRecommendation(response);
     if (currentRecommendation) {
       setPreviousRecommendations((stack) => [...stack, currentRecommendation].slice(-20));
     }
     setStatus("ended");
+    waitingForPrefetchRef.current = true;
+    setWaitingForPrefetch(true);
+    if (prefetchingQueue) {
+      setMessages((p) => [
+        ...p,
+        { role: "agent", content: "这组听完了，我正在接下一组。" },
+      ]);
+      return;
+    }
     setMessages((p) => [
       ...p,
-      { role: "agent", content: "这三首听完了，我再重新找一组。" },
+      { role: "agent", content: "这组听完了，我再重新找一组。" },
     ]);
     void resolveTrack(lastSubmitted, [track.id]);
-  }, [lastSubmitted, moodProfile, playQueuedRecommendation, playbackDuration, playbackTime, resolveTrack, response, track]);
+  }, [lastSubmitted, moodProfile, playPrefetchedResponse, playQueuedRecommendation, playbackDuration, playbackTime, prefetchingQueue, resolveTrack, response, track]);
 
   const handlePlay = useCallback(() => {
     autoRetryCountRef.current = 0;
@@ -659,6 +880,7 @@ export function MusicAgentWindow() {
       ]);
       if (playQueuedRecommendation(undefined, { pushCurrentToPrevious: false })) return;
     }
+    if (track && lastSubmitted && playPrefetchedResponse(undefined, { pushCurrentToPrevious: false })) return;
     if (track && lastSubmitted && autoRetryCountRef.current < 3) {
       autoRetryCountRef.current += 1;
       setMessages((p) => [
@@ -670,7 +892,7 @@ export function MusicAgentWindow() {
     }
     setStatus("error");
     setNotice(reason || "播放出错了，请点击下一首或重新描述感受。");
-  }, [lastSubmitted, moodProfile, playQueuedRecommendation, playbackDuration, playbackTime, recommendationQueue.length, resolveTrack, track]);
+  }, [lastSubmitted, moodProfile, playPrefetchedResponse, playQueuedRecommendation, playbackDuration, playbackTime, recommendationQueue.length, resolveTrack, track]);
 
   const handleFeedback = useCallback((feedback: FeedbackType) => {
     if (!track || !lastSubmitted) return;
@@ -825,7 +1047,15 @@ export function MusicAgentWindow() {
           recommendations: [{ track: selectedTrack, explanationSegments: [] }],
         };
 
+    resolveAbortControllerRef.current?.abort();
+    resolveAbortControllerRef.current = null;
     setRecommendationQueue([]);
+    requestGenerationRef.current += 1;
+    prefetchKeyRef.current = null;
+    setPrefetchedResponse(null);
+    setPrefetchingQueue(false);
+    waitingForPrefetchRef.current = false;
+    setWaitingForPrefetch(false);
     setPreviousRecommendations((stack) => {
       const currentRecommendation = getCurrentRecommendation(response);
       return currentRecommendation ? [...stack, currentRecommendation].slice(-20) : stack;
@@ -870,8 +1100,8 @@ export function MusicAgentWindow() {
   }, [exportingMemory]);
 
   const canSubmit = useMemo(
-    () => inputText.trim().length > 0 && !["thinking", "searching"].includes(status),
-    [inputText, status],
+    () => inputText.trim().length > 0 && !isResolving,
+    [inputText, isResolving],
   );
 
   // ── Render ────────────────────────────────────────────
@@ -1540,6 +1770,24 @@ export function MusicAgentWindow() {
                     </div>
                   )}
 
+                  {prefetchedResponse && prefetchedCandidates.length > 0 && (
+                    <div className="mt-2 rounded-2xl bg-white/60 px-3 py-2 text-xs leading-5 text-foreground/70" aria-live="polite">
+                      <div className="font-medium text-foreground/78">歌曲搜索结果已完成</div>
+                      <div className="text-muted/70">下一首会从这些候选里继续。</div>
+                      <div className="mt-1.5 space-y-1">
+                        {prefetchedCandidates.map((candidate, index) => (
+                          <div key={`${candidate.track.id}-${index}`} className="flex min-w-0 gap-1.5 text-muted/75">
+                            <span className="shrink-0 tabular-nums text-muted/45">{index + 1}.</span>
+                            <span className="truncate">
+                              {candidate.track.title}
+                              {candidate.track.artist ? ` — ${candidate.track.artist}` : ""}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {toolTraceExpanded && (
                     <div className="no-scrollbar mt-2 max-h-[240px] space-y-1.5 overflow-y-auto pr-1">
                       {displayedToolTrace.map((t, idx) => (
@@ -1588,7 +1836,11 @@ export function MusicAgentWindow() {
 
           <div className="shrink-0 border-t border-border/30 px-4 py-4">
             <form
-              onSubmit={(e) => { e.preventDefault(); if (canSubmit) handleSubmit(); }}
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (isResolving) handleAbortResolve();
+                else if (canSubmit) handleSubmit();
+              }}
               className="relative"
             >
               <textarea
@@ -1603,7 +1855,8 @@ export function MusicAgentWindow() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
-                    if (canSubmit) handleSubmit();
+                    if (isResolving) handleAbortResolve();
+                    else if (canSubmit) handleSubmit();
                   }
                 }}
               />
@@ -1625,12 +1878,15 @@ export function MusicAgentWindow() {
                 <Button
                   type="submit"
                   size="sm"
-                  disabled={!canSubmit}
-                  aria-label="发送"
+                  disabled={!isResolving && !canSubmit}
+                  aria-label={isResolving ? "终止" : "发送"}
                   className="min-w-16 bg-foreground text-white hover:bg-foreground/90"
                 >
-                  {status === "thinking" || status === "searching" ? (
-                    "…"
+                  {isResolving ? (
+                    <>
+                      <X size={13} aria-hidden="true" />
+                      终止
+                    </>
                   ) : (
                     <>
                       <SendHorizontal size={13} aria-hidden="true" />

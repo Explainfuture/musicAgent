@@ -1,13 +1,13 @@
 import { fallbackParseMood } from "@/lib/ai/fallbackMood";
 import { callDeepSeekJson, callDeepSeekWithTools } from "@/lib/ai/deepseek";
+import { agentSystemPrompt } from "@/lib/ai/promptTemplates";
 import {
-  agentSystemPrompt,
   buildChatPrompt,
   buildFallbackExplanation,
   buildMoodPrompt,
   buildSelectionPrompt,
-  musicAgentTools,
-} from "@/lib/ai/prompts";
+} from "@/lib/ai/buildPrompts";
+import { musicAgentTools } from "@/lib/ai/tools";
 import { moodProfileSchema, selectedTracksSchema } from "@/lib/ai/schemas";
 import { rankTracks } from "@/lib/music/normalize";
 import { searchQQMusicTracks } from "@/lib/music/qqmusic";
@@ -21,6 +21,8 @@ import type {
 import type { PlayableTrack } from "@/types/music";
 
 type TraceEmitter = (trace: AgentToolTrace) => void;
+type SearchLanguage = NonNullable<MoodProfile["searchLanguage"]>;
+const SEARCH_LANGUAGES: readonly SearchLanguage[] = ["zh-CN", "en", "ja", "ko", "yue", "any"];
 
 function createTraceRecorder(emitTrace?: TraceEmitter) {
   const toolTrace: AgentToolTrace[] = [];
@@ -86,6 +88,7 @@ async function analyzeWithTools(
     userSummary: string;
   };
 
+  const searchLanguage = String(args.searchStrategy.language || "zh-CN");
   const moodProfile: MoodProfile = {
     scene: String(args.moodAnalysis.scene || "daily"),
     mood: Array.isArray(args.moodAnalysis.mood)
@@ -104,7 +107,11 @@ async function analyzeWithTools(
       ? args.searchStrategy.keywords.map(String)
       : [],
     searchGenre: String(args.searchStrategy.genre || ""),
-    searchLanguage: "zh-CN",
+    searchQuery: String(args.searchStrategy.query || args.searchStrategy.searchQuery || ""),
+    searchLanguage: SEARCH_LANGUAGES.includes(searchLanguage as SearchLanguage)
+      ? searchLanguage as SearchLanguage
+      : "any",
+    bpmHint: args.searchStrategy.bpmHint ? String(args.searchStrategy.bpmHint) : undefined,
     summary: String(args.userSummary || ""),
   };
 
@@ -225,9 +232,9 @@ async function selectTracks(input: {
     return recommendations;
   } catch (error) {
     input.diagnostics.push(`LLM selection failed: ${(error as Error).message}`);
-    input.addTrace({ step: "选歌", status: "failed", detail: "模型选歌失败，使用 QQ 候选排序前三首。" });
+    input.addTrace({ step: "选歌", status: "failed", detail: "模型选歌失败，使用 QQ 候选排序前五首。" });
 
-    return input.candidates.slice(0, 3).map((track) => ({
+    return input.candidates.slice(0, 5).map((track) => ({
       track,
       explanationSegments: buildFallbackExplanation({
         userText: input.userText,
@@ -292,13 +299,9 @@ export async function resolveMusicAgent(
     body.feedbackMemory,
   ).slice(0, 10);
 
-  if (candidates.length === 0 && body.previousTrackIds?.length) {
-    candidates = rankTracks(rawCandidates, moodProfile, [], body.userMusicProfile, body.feedbackMemory).slice(0, 10);
-  }
-
   if (candidates.length === 0) {
-    addTrace({ step: "排序", status: "failed", detail: "QQ 曲库暂时没有返回可播放候选。" });
-    const error = new Error("QQ 曲库暂时没搜到合适歌曲，可以换个说法再试。");
+    addTrace({ step: "排序", status: "failed", detail: "QQ 曲库暂时没有返回新的可播放候选。" });
+    const error = new Error("QQ 曲库暂时没搜到新的合适歌曲，可以换个说法再试。");
     error.name = "NoPlayableTrack";
     throw error;
   }

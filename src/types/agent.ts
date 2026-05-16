@@ -19,7 +19,8 @@ export type MoodProfile = {
   avoid: string[];
   keywords: string[];
   searchGenre?: string;
-  searchLanguage?: "zh-CN" | "en" | "any";
+  searchQuery?: string;
+  searchLanguage?: "zh-CN" | "en" | "ja" | "ko" | "yue" | "any";
   bpmHint?: string;
   summary: string;
 };

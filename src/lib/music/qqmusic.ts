@@ -44,9 +44,12 @@ const USER_AGENT =
 import { getQQMusicCookie } from "./qqmusicAuth";
 
 export function buildSearchQuery(moodProfile: MoodProfile): string {
+  const directQuery = moodProfile.searchQuery?.trim();
+  if (directQuery) return directQuery.replace(/\s+/g, " ").slice(0, 60);
+
   const keywords = moodProfile.keywords.join(" ");
   const genre = moodProfile.searchGenre || "";
-  return `${genre} ${keywords}`.replace(/\s+/g, " ").trim().slice(0, 50) || "安静 轻音乐";
+  return `${genre} ${keywords}`.replace(/\s+/g, " ").trim().slice(0, 60) || "安静 轻音乐";
 }
 
 function toPlayableTracks(list: ClientSearchSong[], moodProfile: MoodProfile): PlayableTrack[] {

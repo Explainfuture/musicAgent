@@ -8,7 +8,8 @@ export const moodProfileSchema = z.object({
   avoid: z.array(z.string()),
   keywords: z.array(z.string()).min(1),
   searchGenre: z.string().optional(),
-  searchLanguage: z.enum(["zh-CN", "en", "any"]).optional(),
+  searchQuery: z.string().optional(),
+  searchLanguage: z.enum(["zh-CN", "en", "ja", "ko", "yue", "any"]).optional(),
   bpmHint: z.string().optional(),
   summary: z.string().min(1),
 });
@@ -31,7 +32,7 @@ export const selectedTrackSchema = z.object({
 });
 
 export const selectedTracksSchema = z.object({
-  recommendations: z.array(selectedTrackSchema).min(1).max(3),
+  recommendations: z.array(selectedTrackSchema).min(1).max(5),
 });
 
 export const agentResolveResponseSchema = z.object({
