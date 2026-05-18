@@ -189,10 +189,15 @@ test("Windows packaging patches the executable icon without winCodeSign extracti
   assert.equal(pkg.build.afterPack, "scripts/after-pack.cjs");
   assert.equal(pkg.build.win.icon, "build/icon.ico");
   assert.equal(pkg.build.win.signAndEditExecutable, false);
+  assert.deepEqual(pkg.build.win.target, ["nsis"]);
+  assert.ok(pkg.build.files.includes("!node_modules/**/*"));
   assert.ok(pkg.build.files.includes(".next/standalone/**/*"));
   assert.ok(pkg.build.asarUnpack.includes(".next/standalone/**/*"));
   assert.match(afterPack, /rcedit\.exe/);
   assert.match(afterPack, /--set-icon/);
+  assert.match(afterPack, /KEEP_LOCALES/);
+  assert.match(afterPack, /zh-CN\.pak/);
+  assert.match(afterPack, /en-US\.pak/);
 });
 
 test("QQ lyrics route forwards the saved login cookie", async () => {

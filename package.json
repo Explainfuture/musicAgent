@@ -49,6 +49,7 @@
       "output": "release"
     },
     "files": [
+      "!node_modules/**/*",
       "electron/**/*",
       ".next/standalone/**/*",
       "build/icon.ico",
@@ -61,8 +62,7 @@
       "icon": "build/icon.ico",
       "signAndEditExecutable": false,
       "target": [
-        "nsis",
-        "portable"
+        "nsis"
       ]
     },
     "nsis": {
