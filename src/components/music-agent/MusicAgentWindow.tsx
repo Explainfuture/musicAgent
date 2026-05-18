@@ -9,7 +9,7 @@ import { PlayerCard } from "./PlayerCard";
 import { StatusIndicator } from "./StatusIndicator";
 import { FeedbackBar } from "./FeedbackBar";
 import { Button } from "@/components/ui/button";
-import { readFeedbackMemory, saveFeedbackRecord } from "@/lib/storage/feedbackMemory";
+import { clearFeedbackMemory, readFeedbackMemory, saveFeedbackRecord } from "@/lib/storage/feedbackMemory";
 import {
   clearLikedTracks,
   clearPlayedHistory,
@@ -20,7 +20,8 @@ import {
   setTrackLiked,
 } from "@/lib/storage/playbackLibrary";
 import type { LikedTrackEntry, PlayedTrackEntry } from "@/lib/storage/playbackLibrary";
-import { readUserMusicProfile, updateUserMusicProfile } from "@/lib/storage/userMusicProfile";
+import { clearUserMusicProfile, readUserMusicProfile, updateUserMusicProfile } from "@/lib/storage/userMusicProfile";
+import { buildAgentMemoryContext } from "@/lib/storage/agentMemoryContext";
 import { useSpeechRecognition } from "@/lib/speech/useSpeechRecognition";
 import { cn } from "@/lib/utils";
 import type {
@@ -149,6 +150,7 @@ export function MusicAgentWindow() {
   const [historyPage, setHistoryPage] = useState(1);
   const [historyPageInput, setHistoryPageInput] = useState("");
   const [clearConfirm, setClearConfirm] = useState<HistoryTab | null>(null);
+  const [clearMemoryConfirm, setClearMemoryConfirm] = useState(false);
   const [exportingMemory, setExportingMemory] = useState(false);
   const [settingsPanelOpen, setSettingsPanelOpen] = useState(false);
   const [deepseekApiKey, setDeepseekApiKey] = useState("");
@@ -279,6 +281,12 @@ export function MusicAgentWindow() {
   }, [clearConfirm]);
 
   useEffect(() => {
+    if (!clearMemoryConfirm) return;
+    const timer = window.setTimeout(() => setClearMemoryConfirm(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [clearMemoryConfirm]);
+
+  useEffect(() => {
     setHistoryPage((page) => Math.min(page, historyTotalPages));
   }, [historyTotalPages]);
 
@@ -326,11 +334,11 @@ export function MusicAgentWindow() {
   }, [activeLyricIndex, track?.id]);
 
   // Recent conversation context
-  const recentConv = useMemo(
+  const recentConv = useMemo<Array<{ role: "user" | "agent"; content: string }>>(
     () => messages
       .filter((message): message is Extract<ChatMessage, { role: "user" | "agent" | "system" }> => message.role !== "explanation")
       .slice(-8)
-      .map((m) => ({ role: m.role === "user" ? "user" : "agent" as const, content: m.content })),
+      .map((m) => ({ role: m.role === "user" ? "user" : "agent", content: m.content })),
     [messages],
   );
 
@@ -469,16 +477,24 @@ export function MusicAgentWindow() {
         ...prefetchedIds,
         ...historyIds,
       ]));
+      const playbackLibrary = readPlaybackLibrary();
       const feedbackMemory = readFeedbackMemory();
       const userMusicProfile = readUserMusicProfile();
+      const memoryContext = buildAgentMemoryContext({
+        playbackLibrary,
+        feedbackMemory,
+        userMusicProfile,
+        recentConversation: recentConv,
+        now: new Date(),
+      });
       const playbackMode = window.musicAgentShell?.isElectron ? "electron" : "web";
       setToolTrace((prev) => [
         ...prev,
         {
           step: "用户画像",
           status: "success",
-          detail: userMusicProfile.recentEvents.length
-            ? "已读取用户画像 JSON 和反馈流水。"
+          detail: memoryContext.stats.totalPlayed || memoryContext.stats.totalLiked || memoryContext.stats.totalFeedback
+            ? "已生成精简用户记忆快照。"
             : "用户画像暂无稳定记录。",
         },
       ]);
@@ -494,9 +510,7 @@ export function MusicAgentWindow() {
             deepseekApiKey: deepseekApiKey || undefined,
             playbackMode,
             previousTrackIds: allPrevIds,
-            feedbackMemory,
-            userMusicProfile,
-            recentConversation: recentConv,
+            memoryContext,
           }),
         });
 
@@ -514,9 +528,7 @@ export function MusicAgentWindow() {
               deepseekApiKey: deepseekApiKey || undefined,
               playbackMode,
               previousTrackIds: allPrevIds,
-              feedbackMemory,
-              userMusicProfile,
-              recentConversation: recentConv,
+              memoryContext,
             }),
           });
 
@@ -603,8 +615,16 @@ export function MusicAgentWindow() {
       { step: "续播缓存", status: "running", detail: "正在提前匹配下一组候选歌曲。" },
     ]);
 
+    const playbackLibrary = readPlaybackLibrary();
     const feedbackMemory = readFeedbackMemory();
     const userMusicProfile = readUserMusicProfile();
+    const memoryContext = buildAgentMemoryContext({
+      playbackLibrary,
+      feedbackMemory,
+      userMusicProfile,
+      recentConversation: recentConv,
+      now: new Date(),
+    });
     const playbackMode = window.musicAgentShell?.isElectron ? "electron" : "web";
 
     try {
@@ -616,9 +636,7 @@ export function MusicAgentWindow() {
           deepseekApiKey: deepseekApiKey || undefined,
           playbackMode,
           previousTrackIds: allPrevIds,
-          feedbackMemory,
-          userMusicProfile,
-          recentConversation: recentConv,
+          memoryContext,
         }),
       });
 
@@ -1037,6 +1055,29 @@ export function MusicAgentWindow() {
     setClearConfirm(null);
   }, [clearConfirm]);
 
+  const handleClearMemory = useCallback(() => {
+    if (!clearMemoryConfirm) {
+      setClearMemoryConfirm(true);
+      return;
+    }
+
+    clearFeedbackMemory();
+    clearUserMusicProfile();
+    const library = clearPlayedHistory();
+    setPlayHistory(library.played);
+    setLikedTracks(library.liked);
+    setPrevIds([]);
+    setPreviousRecommendations([]);
+    setRecommendationQueue([]);
+    setPrefetchedResponse(null);
+    setPrefetchingQueue(false);
+    prefetchKeyRef.current = null;
+    waitingForPrefetchRef.current = false;
+    setWaitingForPrefetch(false);
+    setClearMemoryConfirm(false);
+    setNotice("已清空推荐记忆，喜欢的歌还保留着。");
+  }, [clearMemoryConfirm]);
+
   const playLibraryTrack = useCallback((selectedTrack: PlayableTrack) => {
     const nextResponse: AgentResolveResponse = response
       ? { ...response, track: selectedTrack, explanationSegments: [] }
@@ -1068,11 +1109,21 @@ export function MusicAgentWindow() {
   const handleExportMemory = useCallback(async () => {
     if (exportingMemory) return;
 
+    const playbackLibrary = readPlaybackLibrary();
+    const feedbackMemory = readFeedbackMemory();
+    const userMusicProfile = readUserMusicProfile();
     const payload = {
       exportedAt: new Date().toISOString(),
-      playbackLibrary: readPlaybackLibrary(),
-      feedbackMemory: readFeedbackMemory(),
-      userMusicProfile: readUserMusicProfile(),
+      playbackLibrary,
+      feedbackMemory,
+      userMusicProfile,
+      compactMemoryContext: buildAgentMemoryContext({
+        playbackLibrary,
+        feedbackMemory,
+        userMusicProfile,
+        recentConversation: recentConv,
+        now: new Date(),
+      }),
     };
     setExportingMemory(true);
 
@@ -1097,7 +1148,7 @@ export function MusicAgentWindow() {
     } finally {
       setExportingMemory(false);
     }
-  }, [exportingMemory]);
+  }, [exportingMemory, recentConv]);
 
   const canSubmit = useMemo(
     () => inputText.trim().length > 0 && !isResolving,
@@ -1360,6 +1411,20 @@ export function MusicAgentWindow() {
               >
                 <Download size={13} aria-hidden="true" />
                 {exportingMemory ? "导出中" : "导出我的记忆"}
+              </button>
+              <button
+                type="button"
+                onClick={handleClearMemory}
+                className={cn(
+                  "flex h-8 cursor-pointer items-center gap-1.5 rounded-full px-3 text-[11px] font-medium transition-colors focus-visible:ring-2 focus-visible:ring-rose/30",
+                  clearMemoryConfirm
+                    ? "bg-rose text-white hover:bg-rose/90"
+                    : "bg-white/65 text-muted/70 hover:bg-rose-surface hover:text-rose",
+                )}
+                title="清空推荐画像、反馈和已播放历史，保留喜欢收藏"
+              >
+                <Trash2 size={13} aria-hidden="true" />
+                {clearMemoryConfirm ? "确认清空" : "清空记忆"}
               </button>
               {qqLoggedIn && (
                 <span className="rounded-full bg-success/10 px-2.5 py-1 text-[11px] font-medium text-success/75">

@@ -70,6 +70,25 @@ function addSignals(
   return values.reduce((next, value) => upsertSignal(next, value, delta, now), signals);
 }
 
+function normalizeSignals(signals: unknown): WeightedPreference[] {
+  if (!Array.isArray(signals)) return [];
+  return signals
+    .flatMap((signal) => {
+      if (!signal || typeof signal !== "object") return [];
+      const item = signal as Partial<WeightedPreference>;
+      if (!item.value) return [];
+      return [{
+        value: String(item.value),
+        weight: Number(item.weight || 0),
+        count: Number(item.count || 0),
+        updatedAt: item.updatedAt || new Date().toISOString(),
+      }];
+    })
+    .filter((signal) => signal.weight > 0)
+    .sort((left, right) => right.weight - left.weight || right.count - left.count)
+    .slice(0, MAX_SIGNALS);
+}
+
 function mergeProfile(raw: unknown): UserMusicProfile {
   if (!raw || typeof raw !== "object") return emptyProfile();
   const profile = raw as Partial<UserMusicProfile>;
@@ -78,16 +97,16 @@ function mergeProfile(raw: unknown): UserMusicProfile {
     ...base,
     ...profile,
     version: 1,
-    preferredGenres: profile.preferredGenres || [],
-    preferredScenes: profile.preferredScenes || [],
-    preferredMoods: profile.preferredMoods || [],
-    likedArtists: profile.likedArtists || [],
-    avoidedArtists: profile.avoidedArtists || [],
-    likedTags: profile.likedTags || [],
-    avoidedTags: profile.avoidedTags || [],
+    preferredGenres: normalizeSignals(profile.preferredGenres),
+    preferredScenes: normalizeSignals(profile.preferredScenes),
+    preferredMoods: normalizeSignals(profile.preferredMoods),
+    likedArtists: normalizeSignals(profile.likedArtists),
+    avoidedArtists: normalizeSignals(profile.avoidedArtists),
+    likedTags: normalizeSignals(profile.likedTags),
+    avoidedTags: normalizeSignals(profile.avoidedTags),
     energyPreference: { ...base.energyPreference, ...(profile.energyPreference || {}) },
-    bpmHints: profile.bpmHints || [],
-    recentEvents: profile.recentEvents || [],
+    bpmHints: (profile.bpmHints || []).slice(0, 8),
+    recentEvents: (profile.recentEvents || []).slice(0, MAX_EVENTS),
     updatedAt: profile.updatedAt || base.updatedAt,
   };
 }
@@ -242,4 +261,17 @@ export function updateUserMusicProfile(event: PlaybackEvent): UserMusicProfile {
   };
 
   return writeUserMusicProfile(next);
+}
+
+export function clearUserMusicProfile(): UserMusicProfile {
+  const next = emptyProfile();
+  if (typeof window === "undefined") return next;
+  if (flushTimer) {
+    window.clearTimeout(flushTimer);
+    flushTimer = null;
+  }
+  memoryProfile = next;
+  bindLifecycleFlush();
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  return next;
 }

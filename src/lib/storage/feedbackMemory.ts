@@ -6,12 +6,16 @@ import type { PlayableTrack } from "@/types/music";
 const STORAGE_KEY = "music-agent-feedback-memory";
 const MAX_RECORDS = 50;
 
+function normalizeFeedbackMemory(raw: unknown): FeedbackRecord[] {
+  return Array.isArray(raw) ? (raw as FeedbackRecord[]).slice(0, MAX_RECORDS) : [];
+}
+
 export function readFeedbackMemory(): FeedbackRecord[] {
   if (typeof window === "undefined") return [];
 
   try {
     const rawValue = window.localStorage.getItem(STORAGE_KEY);
-    return rawValue ? (JSON.parse(rawValue) as FeedbackRecord[]) : [];
+    return rawValue ? normalizeFeedbackMemory(JSON.parse(rawValue)) : [];
   } catch {
     return [];
   }
@@ -35,4 +39,10 @@ export function saveFeedbackRecord(input: {
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
 
   return records;
+}
+
+export function clearFeedbackMemory() {
+  if (typeof window === "undefined") return [];
+  window.localStorage.removeItem(STORAGE_KEY);
+  return [];
 }

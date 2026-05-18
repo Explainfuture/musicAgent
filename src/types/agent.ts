@@ -54,6 +54,19 @@ export type WeightedPreference = {
   updatedAt: string;
 };
 
+export type MemorySignal = Pick<WeightedPreference, "value" | "weight" | "count">;
+
+export type MemoryDayPeriod = "morning" | "afternoon" | "evening" | "late_night";
+
+export type AgentLocalTimeContext = {
+  iso: string;
+  timezone: string;
+  hour: number;
+  weekday: number;
+  dayPeriod: MemoryDayPeriod;
+  isWeekend: boolean;
+};
+
 export type UserMusicProfile = {
   version: 1;
   preferredGenres: WeightedPreference[];
@@ -94,6 +107,55 @@ export type PlaybackEvent = {
   createdAt?: string;
 };
 
+export type MemoryTrackRef = {
+  id: string;
+  source: PlayableTrack["source"];
+  title: string;
+  artist?: string;
+  tags?: string[];
+  playedAt?: string;
+  likedAt?: string;
+  playCount?: number;
+};
+
+export type MemoryFeedbackRef = {
+  trackId: string;
+  source: PlayableTrack["source"];
+  feedback: FeedbackType;
+  originalText?: string;
+  createdAt: string;
+};
+
+export type AgentMemoryContext = {
+  version: 1;
+  generatedAt: string;
+  localTime: AgentLocalTimeContext;
+  profile: {
+    preferredGenres: MemorySignal[];
+    preferredScenes: MemorySignal[];
+    preferredMoods: MemorySignal[];
+    likedArtists: MemorySignal[];
+    avoidedArtists: MemorySignal[];
+    likedTags: MemorySignal[];
+    avoidedTags: MemorySignal[];
+    languagePreference?: MoodProfile["searchLanguage"];
+    energyPreference: Record<MoodProfile["energy"], number>;
+    bpmHints: string[];
+  };
+  history: {
+    recentPlayed: MemoryTrackRef[];
+    likedTracks: MemoryTrackRef[];
+    negativeFeedback: MemoryFeedbackRef[];
+  };
+  recentConversation: Array<{ role: "user" | "agent"; content: string }>;
+  stats: {
+    totalPlayed: number;
+    totalLiked: number;
+    totalFeedback: number;
+    trimmed: boolean;
+  };
+};
+
 export type AgentToolTrace = {
   step: string;
   status: "running" | "success" | "failed";
@@ -110,6 +172,7 @@ export type AgentResolveRequest = {
   deepseekApiKey?: string;
   playbackMode?: "electron" | "web";
   previousTrackIds?: string[];
+  memoryContext?: AgentMemoryContext;
   feedbackMemory?: FeedbackRecord[];
   userMusicProfile?: UserMusicProfile;
   recentConversation?: Array<{ role: "user" | "agent"; content: string }>;

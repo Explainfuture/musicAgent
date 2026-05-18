@@ -1,4 +1,4 @@
-import type { FeedbackRecord, MoodProfile, UserMusicProfile, WeightedPreference } from "@/types/agent";
+import type { AgentMemoryContext, FeedbackRecord, MemorySignal, MoodProfile, UserMusicProfile, WeightedPreference } from "@/types/agent";
 import type { PlayableTrack } from "@/types/music";
 
 const NEGATIVE_FEEDBACK = new Set<FeedbackRecord["feedback"]>([
@@ -32,6 +32,12 @@ function preferenceScore(text: string, signals: WeightedPreference[], multiplier
   }, 0);
 }
 
+function memorySignalScore(text: string, signals: MemorySignal[] = [], multiplier: number) {
+  return signals.reduce((score, signal) => {
+    return text.includes(signal.value.toLowerCase()) ? score + signal.weight * multiplier : score;
+  }, 0);
+}
+
 function scoreUserProfile(track: PlayableTrack, userMusicProfile?: UserMusicProfile) {
   if (!userMusicProfile) return 0;
   const tags = track.tags?.map((tag) => tag.toLowerCase()) ?? [];
@@ -50,6 +56,28 @@ function scoreUserProfile(track: PlayableTrack, userMusicProfile?: UserMusicProf
   return positive - negative;
 }
 
+function scoreMemoryContext(track: PlayableTrack, memoryContext?: AgentMemoryContext) {
+  if (!memoryContext) return 0;
+  const tags = track.tags?.map((tag) => tag.toLowerCase()) ?? [];
+  const artist = (track.artist || "").toLowerCase();
+  const text = [track.title, artist, ...tags].join(" ").toLowerCase();
+  const profile = memoryContext.profile;
+
+  const positive =
+    memorySignalScore(text, profile.likedTags, 1.5) +
+    memorySignalScore(artist, profile.likedArtists, 2) +
+    memorySignalScore(text, profile.preferredGenres, 1);
+
+  const negative =
+    memorySignalScore(text, profile.avoidedTags, 2) +
+    memorySignalScore(artist, profile.avoidedArtists, 2.5);
+
+  const likedTrackBonus = memoryContext.history.likedTracks.some((item) => item.id === track.id) ? 3 : 0;
+  const negativeFeedbackPenalty = memoryContext.history.negativeFeedback.some((item) => item.trackId === track.id) ? 4 : 0;
+
+  return positive - negative + likedTrackBonus - negativeFeedbackPenalty;
+}
+
 function scoreFeedbackMemory(track: PlayableTrack, feedbackMemory: FeedbackRecord[] = []) {
   return feedbackMemory.reduce((score, record) => {
     if (record.trackId !== track.id) return score;
@@ -64,6 +92,7 @@ export function scoreTrack(
   moodProfile: MoodProfile,
   userMusicProfile?: UserMusicProfile,
   feedbackMemory: FeedbackRecord[] = [],
+  memoryContext?: AgentMemoryContext,
 ) {
   const tags = track.tags?.map((tag) => tag.toLowerCase()) ?? [];
   const text = [track.title, track.artist, ...tags].join(" ").toLowerCase();
@@ -74,7 +103,13 @@ export function scoreTrack(
     const normalized = avoid.replace("too_", "");
     return text.includes(normalized) ? score + 3 : score;
   }, 0);
-  return keywordScore - avoidPenalty + scoreUserProfile(track, userMusicProfile) + scoreFeedbackMemory(track, feedbackMemory);
+  return (
+    keywordScore -
+    avoidPenalty +
+    scoreUserProfile(track, userMusicProfile) +
+    scoreFeedbackMemory(track, feedbackMemory) +
+    scoreMemoryContext(track, memoryContext)
+  );
 }
 
 export function rankTracks(
@@ -83,6 +118,7 @@ export function rankTracks(
   previousTrackIds: string[] = [],
   userMusicProfile?: UserMusicProfile,
   feedbackMemory: FeedbackRecord[] = [],
+  memoryContext?: AgentMemoryContext,
 ) {
   const recentSkippedIds =
     userMusicProfile?.recentEvents
@@ -93,11 +129,15 @@ export function rankTracks(
     .filter((record) => record.feedback === "skipped" || record.feedback === "not_fit")
     .slice(0, 20)
     .map((record) => record.trackId);
-  const blockedIds = Array.from(new Set([...previousTrackIds, ...recentSkippedIds, ...feedbackBlockedIds]));
+  const memoryBlockedIds = memoryContext?.history.negativeFeedback
+    .filter((record) => record.feedback === "skipped" || record.feedback === "not_fit")
+    .slice(0, 20)
+    .map((record) => record.trackId) ?? [];
+  const blockedIds = Array.from(new Set([...previousTrackIds, ...recentSkippedIds, ...feedbackBlockedIds, ...memoryBlockedIds]));
 
   return filterPreviousTracks(uniqueTracks(tracks), blockedIds).sort(
     (left, right) =>
-      scoreTrack(right, moodProfile, userMusicProfile, feedbackMemory) -
-      scoreTrack(left, moodProfile, userMusicProfile, feedbackMemory),
+      scoreTrack(right, moodProfile, userMusicProfile, feedbackMemory, memoryContext) -
+      scoreTrack(left, moodProfile, userMusicProfile, feedbackMemory, memoryContext),
   );
 }

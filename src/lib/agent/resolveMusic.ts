@@ -6,6 +6,7 @@ import {
   buildFallbackExplanation,
   buildMoodPrompt,
   buildSelectionPrompt,
+  buildToolAnalysisPrompt,
 } from "@/lib/ai/buildPrompts";
 import { musicAgentTools } from "@/lib/ai/tools";
 import { moodProfileSchema, selectedTracksSchema } from "@/lib/ai/schemas";
@@ -38,6 +39,7 @@ function createTraceRecorder(emitTrace?: TraceEmitter) {
 async function chatReply(
   userText: string,
   recentConversation: Array<{ role: "user" | "agent"; content: string }>,
+  memoryContext: AgentResolveRequest["memoryContext"],
   apiKey?: string,
 ) {
   try {
@@ -45,7 +47,7 @@ async function chatReply(
       { role: "system", content: agentSystemPrompt },
       {
         role: "user",
-        content: buildChatPrompt(userText, recentConversation),
+        content: buildChatPrompt(userText, recentConversation, memoryContext),
       },
     ], apiKey);
     return result.reply;
@@ -56,6 +58,7 @@ async function chatReply(
 
 async function analyzeWithTools(
   text: string,
+  memoryContext: AgentResolveRequest["memoryContext"],
   diagnostics: string[],
   addTrace: TraceEmitter,
   apiKey?: string,
@@ -66,7 +69,7 @@ async function analyzeWithTools(
       { role: "system", content: agentSystemPrompt },
       {
         role: "user",
-        content: `用户说："${text}"。如果用户想要音乐，请调用 analyze_and_search 工具。`,
+        content: buildToolAnalysisPrompt(text, memoryContext),
       },
     ],
     tools: musicAgentTools,
@@ -135,7 +138,7 @@ async function parseMoodFallback(
   try {
     const result = await callDeepSeekJson<unknown>([
       { role: "system", content: agentSystemPrompt },
-      { role: "user", content: buildMoodPrompt(text, body.userMusicProfile) },
+      { role: "user", content: buildMoodPrompt(text, body.memoryContext, body.userMusicProfile) },
     ], body.deepseekApiKey);
     const moodProfile = moodProfileSchema.parse(result);
     addTrace({ step: "情绪分析", status: "success", detail: "已完成情绪解析。" });
@@ -204,6 +207,7 @@ async function selectTracks(input: {
           userText: input.userText,
           moodProfile: input.moodProfile,
           candidates: input.candidates,
+          memoryContext: input.body.memoryContext,
           userMusicProfile: input.body.userMusicProfile,
         }),
       },
@@ -258,15 +262,18 @@ export async function resolveMusicAgent(
   addTrace({
     step: "用户画像",
     status: "success",
-    detail: body.userMusicProfile?.recentEvents.length
-      ? "已读取用户画像 JSON 和历史反馈。"
+    detail: body.memoryContext?.stats.totalPlayed ||
+      body.memoryContext?.stats.totalLiked ||
+      body.memoryContext?.stats.totalFeedback ||
+      body.userMusicProfile?.recentEvents.length
+      ? "已读取精简用户记忆上下文。"
       : "用户画像暂无稳定记录。",
   });
 
   let moodProfile: MoodProfile | null = null;
 
   try {
-    moodProfile = await analyzeWithTools(text, diagnostics, addTrace, body.deepseekApiKey);
+    moodProfile = await analyzeWithTools(text, body.memoryContext, diagnostics, addTrace, body.deepseekApiKey);
   } catch (error) {
     diagnostics.push(`Tool calling failed: ${(error as Error).message}`);
   }
@@ -275,7 +282,12 @@ export async function resolveMusicAgent(
     const hasExplicitMusicIntent = /歌|音乐|放一首|听|换一首|推荐|播放|曲/i.test(text);
     if (!hasExplicitMusicIntent) {
       addTrace({ step: "聊天回复", status: "running", detail: "正在生成自然回复。" });
-      const reply = await chatReply(text, body.recentConversation || [], body.deepseekApiKey);
+      const reply = await chatReply(
+        text,
+        body.memoryContext?.recentConversation || body.recentConversation || [],
+        body.memoryContext,
+        body.deepseekApiKey,
+      );
       addTrace({ step: "聊天回复", status: "success", detail: "已生成回复。" });
       return {
         intent: "chat",
@@ -297,6 +309,7 @@ export async function resolveMusicAgent(
     body.previousTrackIds,
     body.userMusicProfile,
     body.feedbackMemory,
+    body.memoryContext,
   ).slice(0, 10);
 
   if (candidates.length === 0) {

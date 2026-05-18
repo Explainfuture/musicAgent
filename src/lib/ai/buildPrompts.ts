@@ -1,4 +1,4 @@
-﻿import type { MoodProfile, UserMusicProfile, WeightedPreference } from "@/types/agent";
+import type { AgentMemoryContext, MoodProfile, UserMusicProfile, WeightedPreference } from "@/types/agent";
 import type { PlayableTrack } from "@/types/music";
 
 // ── Intent classification prompt ─────────────────────
@@ -21,6 +21,7 @@ export function buildIntentPrompt(userText: string, hasTrack: boolean) {
 export function buildChatPrompt(
   userText: string,
   recentConversation: Array<{ role: "user" | "agent"; content: string }>,
+  memoryContext?: AgentMemoryContext,
 ) {
   const history = recentConversation
     .slice(-6)
@@ -28,6 +29,7 @@ export function buildChatPrompt(
     .join("\n");
 
   return `用户在跟你聊天（不是要点歌）。请自然、温柔地回复。
+${buildLocalTimeContext(memoryContext)}
 ${history ? `\n最近的对话:\n${history}\n` : ""}
 用户说: "${userText}"
 
@@ -50,7 +52,36 @@ function topProfileValues(values: WeightedPreference[] | undefined) {
     .map((item) => ({ value: item.value, weight: item.weight }));
 }
 
-export function buildUserProfileContext(userMusicProfile?: UserMusicProfile) {
+function buildLocalTimeContext(memoryContext?: AgentMemoryContext) {
+  if (!memoryContext) return "";
+  return `本地时间 JSON：
+${JSON.stringify(memoryContext.localTime)}
+
+时间使用规则：
+- 当前用户明确需求永远优先，时间只作为轻量上下文。
+- late_night/睡前倾向低刺激、少鼓点；morning 可以更清醒；evening 可以更放松；通勤或工作日只作为辅助判断。`;
+}
+
+export function buildUserProfileContext(
+  memoryContext?: AgentMemoryContext,
+  userMusicProfile?: UserMusicProfile,
+) {
+  if (memoryContext) {
+    return `用户记忆上下文 JSON：
+${JSON.stringify({
+  localTime: memoryContext.localTime,
+  profile: memoryContext.profile,
+  history: memoryContext.history,
+  stats: memoryContext.stats,
+})}
+
+记忆使用规则：
+- 当前这句话的明确需求优先于时间和长期画像。
+- 只能引用 memoryContext.history 中真实出现的历史歌曲，不能编造用户听过或喜欢过的歌。
+- 推荐理由里最多自然提到 1 首历史歌；只有相关时才提，不要每次硬列清单。
+- 最近负反馈和跳过优先用于避开重复、太吵、太丧、太平或不对味的方向。`;
+  }
+
   if (!userMusicProfile || userMusicProfile.recentEvents.length === 0) {
     return "用户长期音乐画像：暂无稳定记录。";
   }
@@ -71,11 +102,15 @@ ${JSON.stringify({
 })}`;
 }
 
-export function buildMoodPrompt(userText: string, userMusicProfile?: UserMusicProfile) {
+export function buildMoodPrompt(
+  userText: string,
+  memoryContext?: AgentMemoryContext,
+  userMusicProfile?: UserMusicProfile,
+) {
   return `分析用户的音乐需求。
 
 用户说："${userText}"
-${buildUserProfileContext(userMusicProfile)}
+${buildUserProfileContext(memoryContext, userMusicProfile)}
 
 请参考长期画像，但当前这句话的明确需求优先。
 
@@ -107,12 +142,20 @@ ${buildUserProfileContext(userMusicProfile)}
 }`;
 }
 
+export function buildToolAnalysisPrompt(userText: string, memoryContext?: AgentMemoryContext) {
+  return `用户说："${userText}"。
+${buildUserProfileContext(memoryContext)}
+
+如果用户想要音乐，请调用 analyze_and_search 工具。分析时要结合本地时间、长期偏好、最近喜欢/跳过/负反馈，但当前用户明确需求优先。`;
+}
+
 // ── Selection prompt ───────────────────────────────────
 
 export function buildSelectionPrompt(input: {
   userText: string;
   moodProfile: MoodProfile;
   candidates: PlayableTrack[];
+  memoryContext?: AgentMemoryContext;
   userMusicProfile?: UserMusicProfile;
 }) {
   const genre = input.moodProfile.searchGenre || "";
@@ -128,7 +171,7 @@ export function buildSelectionPrompt(input: {
 语言: ${input.moodProfile.searchLanguage || "any"}
 ${bpm ? `BPM: ${bpm}` : ""}
 避开: ${input.moodProfile.avoid.join("、")}
-${buildUserProfileContext(input.userMusicProfile)}
+${buildUserProfileContext(input.memoryContext, input.userMusicProfile)}
 
 候选 (${input.candidates.length} 首):
 ${JSON.stringify(
@@ -150,6 +193,7 @@ ${JSON.stringify(
 6. 如果长期画像和当前需求冲突，当前需求优先；否则优先贴近长期偏好，避开最近跳过或明确负反馈的方向
 7. 当用户反馈"太吵""太丧""换一首""不要这个"时，要主动避开上一首的问题和高度相似的方向
 8. 每首都要写独立推荐理由，方便用户点下一首时直接展示
+9. 可以在推荐理由里自然提到 1 首用户之前听过或喜欢过的歌作为参照，但只能来自用户记忆上下文，且不相关时不要提
 
 返回 JSON:
 {

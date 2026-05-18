@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { rankTracks } from "../src/lib/music/normalize.ts";
+import { buildAgentMemoryContext, TARGET_MEMORY_CONTEXT_BYTES } from "../src/lib/storage/agentMemoryContext.ts";
 
 const moodProfile = {
   scene: "daily",
@@ -41,6 +42,89 @@ test("feedback memory blocks rejected tracks and promotes liked tracks", () => {
 
   assert.equal(ranked[0].id, "track_liked");
   assert.equal(ranked.some((track) => track.id === "track_rejected"), false);
+});
+
+test("agent memory context trims local memory into a compact request payload", () => {
+  const makeTrack = (index) => ({
+    id: `song_${index}`,
+    source: "qqmusic",
+    title: `A very long remembered song title ${index}`.repeat(3),
+    artist: `artist_${index}`,
+    audioUrl: "https://example.test/audio.mp3",
+    coverUrl: "https://example.test/cover.jpg",
+    lyrics: "long lyric should never be sent",
+    timedLyrics: [{ time: 1, text: "timed lyric should never be sent" }],
+    tags: Array.from({ length: 12 }, (_, tagIndex) => `tag_${index}_${tagIndex}`),
+  });
+  const makeSignal = (index) => ({
+    value: `signal_${index}`,
+    weight: 20 - index / 10,
+    count: 20 - index,
+    updatedAt: "2026-05-18T00:00:00.000Z",
+  });
+  const playbackLibrary = {
+    version: 1,
+    played: Array.from({ length: 30 }, (_, index) => ({
+      track: makeTrack(index),
+      playedAt: `2026-05-18T00:00:${String(index).padStart(2, "0")}.000Z`,
+      playCount: index + 1,
+    })),
+    liked: Array.from({ length: 20 }, (_, index) => ({
+      track: makeTrack(index + 100),
+      likedAt: `2026-05-17T00:00:${String(index).padStart(2, "0")}.000Z`,
+    })),
+  };
+  const feedbackMemory = Array.from({ length: 20 }, (_, index) => ({
+    trackId: `song_${index}`,
+    source: "qqmusic",
+    feedback: index % 2 === 0 ? "too_loud" : "good_fit",
+    originalText: "this original feedback text is intentionally long ".repeat(20),
+    createdAt: `2026-05-16T00:00:${String(index).padStart(2, "0")}.000Z`,
+  }));
+  const userMusicProfile = {
+    version: 1,
+    preferredGenres: Array.from({ length: 12 }, (_, index) => makeSignal(index)),
+    preferredScenes: Array.from({ length: 12 }, (_, index) => makeSignal(index)),
+    preferredMoods: Array.from({ length: 12 }, (_, index) => makeSignal(index)),
+    likedArtists: Array.from({ length: 12 }, (_, index) => makeSignal(index)),
+    avoidedArtists: Array.from({ length: 12 }, (_, index) => makeSignal(index)),
+    likedTags: Array.from({ length: 12 }, (_, index) => makeSignal(index)),
+    avoidedTags: Array.from({ length: 12 }, (_, index) => makeSignal(index)),
+    languagePreference: "zh-CN",
+    energyPreference: { low: 2, medium: 4, high: 1 },
+    bpmHints: Array.from({ length: 12 }, (_, index) => `${60 + index}-${80 + index}`),
+    recentEvents: [],
+    updatedAt: "2026-05-18T00:00:00.000Z",
+  };
+
+  const context = buildAgentMemoryContext({
+    playbackLibrary,
+    feedbackMemory,
+    userMusicProfile,
+    recentConversation: Array.from({ length: 10 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "agent",
+      content: "conversation content ".repeat(40),
+    })),
+    now: new Date(2026, 4, 18, 23, 30, 0),
+  });
+  const serialized = JSON.stringify(context);
+
+  assert.ok(new TextEncoder().encode(serialized).length <= TARGET_MEMORY_CONTEXT_BYTES);
+  assert.equal(context.history.recentPlayed.length, 8);
+  assert.equal(context.history.likedTracks.length, 8);
+  assert.equal(context.history.negativeFeedback.length, 8);
+  assert.equal(context.recentConversation.length, 6);
+  assert.equal(context.profile.preferredGenres.length, 6);
+  assert.equal(context.profile.bpmHints.length, 5);
+  assert.equal(context.localTime.hour, 23);
+  assert.equal(context.localTime.dayPeriod, "late_night");
+  assert.equal(context.localTime.weekday, 1);
+  assert.equal(context.localTime.isWeekend, false);
+  assert.equal(context.stats.trimmed, true);
+  assert.equal(serialized.includes("audioUrl"), false);
+  assert.equal(serialized.includes("coverUrl"), false);
+  assert.equal(serialized.includes("lyrics"), false);
+  assert.equal(serialized.includes("timedLyrics"), false);
 });
 
 test("gitignore does not contain NUL bytes", async () => {
@@ -156,6 +240,53 @@ test("agent prompt includes safety boundaries and candidate-only selection", asy
   assert.match(promptBuilders, /searchLanguage": "zh-CN \| en \| ja \| ko \| yue \| any"/);
   assert.match(tools, /"ko"/);
   assert.match(schemas, /"yue"/);
+});
+
+test("agent prompts include compact memory context and time-aware rules", async () => {
+  const templates = await readFile("src/lib/ai/promptTemplates.ts", "utf8");
+  const promptBuilders = await readFile("src/lib/ai/buildPrompts.ts", "utf8");
+  const resolver = await readFile("src/lib/agent/resolveMusic.ts", "utf8");
+
+  assert.match(templates, /当前用户明确需求永远优先于本地时间和长期记忆/);
+  assert.match(templates, /最多自然提到 1 首历史歌/);
+  assert.match(promptBuilders, /用户记忆上下文 JSON/);
+  assert.match(promptBuilders, /本地时间 JSON/);
+  assert.match(promptBuilders, /buildToolAnalysisPrompt/);
+  assert.match(resolver, /buildToolAnalysisPrompt\(text, memoryContext\)/);
+  assert.match(resolver, /body\.memoryContext/);
+});
+
+test("agent requests use compact memory context and export includes the compact snapshot", async () => {
+  const windowComponent = await readFile("src/components/music-agent/MusicAgentWindow.tsx", "utf8");
+  const requestBodies = [...windowComponent.matchAll(/body: JSON\.stringify\(\{([\s\S]*?)\}\),/g)]
+    .map((match) => match[1])
+    .filter((body) => body.includes("previousTrackIds"));
+
+  assert.match(windowComponent, /buildAgentMemoryContext/);
+  assert.match(windowComponent, /memoryContext,/);
+  assert.match(windowComponent, /compactMemoryContext/);
+  assert.equal(requestBodies.length >= 2, true);
+  for (const body of requestBodies) {
+    assert.match(body, /memoryContext/);
+    assert.doesNotMatch(body, /feedbackMemory/);
+    assert.doesNotMatch(body, /userMusicProfile/);
+    assert.doesNotMatch(body, /recentConversation/);
+  }
+});
+
+test("clear memory keeps liked tracks while clearing recommendation memory", async () => {
+  const windowComponent = await readFile("src/components/music-agent/MusicAgentWindow.tsx", "utf8");
+  const feedbackMemory = await readFile("src/lib/storage/feedbackMemory.ts", "utf8");
+  const userMusicProfile = await readFile("src/lib/storage/userMusicProfile.ts", "utf8");
+
+  assert.match(windowComponent, /handleClearMemory/);
+  assert.match(windowComponent, /clearFeedbackMemory\(\)/);
+  assert.match(windowComponent, /clearUserMusicProfile\(\)/);
+  assert.match(windowComponent, /clearPlayedHistory\(\)/);
+  assert.match(windowComponent, /setLikedTracks\(library\.liked\)/);
+  assert.match(windowComponent, /清空记忆/);
+  assert.match(feedbackMemory, /export function clearFeedbackMemory/);
+  assert.match(userMusicProfile, /export function clearUserMusicProfile/);
 });
 
 test("playback queue prefetches when two or fewer candidates remain", async () => {
